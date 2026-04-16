@@ -1,0 +1,22 @@
+# Parloa infra core
+git@github.com:parloa/parloa-infra.git
+git@github.com:parloa/parloa-infra-global.git
+git@github.com:parloa/parloa-infra-it.git
+git@github.com:parloa/parloa-infra-pre-stamp.git
+git@github.com:parloa/parloa-k8s.git
+git@github.com:parloa/parloa-terraform-modules.git
+
+# Stamps and Deployment Units
+git@github.com:parloa/stamps-catalog.git
+git@github.com:parloa/stamps-release-channels.git
+git@github.com:parloa/crossplane-xrd.git
+
+# Catalog
+git@github.com:parloa/engineering-catalog.git
+
+# Kitchens (provide skills and plugins)
+git@github.com:parloa/claudes-kitchen.git
+git@github.com:parloa/open-kitchen.git
+
+# Agent guardrails (policy-gate, hooks, custom skills/rules)
+git@github.com:parloa/cursor-self-hosted-agent.git

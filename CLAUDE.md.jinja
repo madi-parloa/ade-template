@@ -1,0 +1,24 @@
+# {{ ade_name }} — Claude Instructions
+
+{{ description }}
+
+Read `AGENTS.md` for the full workspace contract. This file adds Claude-specific guidance.
+
+## Behavior
+
+- Read the relevant repo's `AGENTS.md` or `CLAUDE.md` before making changes in any subdirectory.
+- Use GSD commands (`/gsd-plan-phase`, `/gsd-execute-phase`, `/gsd-verify-work`, etc.) for structured work.
+- Consult `.planning/codebase/` for pre-analyzed codebase intelligence before reasoning about architecture.
+- Do not assume repos are one unified system — they are a portfolio. See `.planning/codebase/ARCHITECTURE.md`.
+
+## Terraform / OpenTofu
+
+- Always run `terraform validate` and `terraform plan` before claiming a change is safe.
+- In `parloa-infra-pre-stamp/`: never edit `*.tm.hcl` directly; use the generator scripts.
+- Check the relevant module registry in `parloa-terraform-modules/` before writing inline resources.
+
+## Kubernetes
+
+- Argo CD is the deployment mechanism in `parloa-k8s/`.
+- Stamp automation is one subsystem inside that repo, not the repo's whole purpose.
+- Respect sync-wave annotations and GitOps ordering.

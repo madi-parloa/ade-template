@@ -1,0 +1,14 @@
+_min_copier_version: "9.0.0"
+
+_tasks:
+  - "bash install.sh"
+
+ade_name:
+  type: str
+  help: Short name for this ADE (used in AGENTS.md, README.md, and PROJECT.md)
+  default: my-ade
+
+description:
+  type: str
+  help: One-line purpose for this ADE
+  default: Parloa infra experiments

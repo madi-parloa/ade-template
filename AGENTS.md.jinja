@@ -1,0 +1,42 @@
+# {{ ade_name }}
+
+{{ description }}
+
+You are running in an ADE (Agent Dev Environment). This workspace contains multiple Parloa infrastructure repositories.
+
+## Workspace layout
+
+| Directory | Org/Repo | Description |
+|-----------|----------|-------------|
+| `crossplane-xrd/` | parloa/crossplane-xrd | Crossplane Composite Resource Definitions (XRDs) for Parloa Deployment Units |
+| `parloa-infra/` | parloa/parloa-infra | Main Parloa infrastructure platform (Terraform/OpenTofu) |
+| `parloa-infra-global/` | parloa/parloa-infra-global | Global DNS and cross-region infrastructure (Terraform) |
+| `parloa-infra-it/` | parloa/parloa-infra-it | IT team infrastructure (Terraform) |
+| `parloa-infra-pre-stamp/` | parloa/parloa-infra-pre-stamp | Pre-stamp Azure backend infra (OpenTofu + Terramate) |
+| `parloa-k8s/` | parloa/parloa-k8s | Kubernetes platform configuration and Helm releases |
+| `stamps-catalog/` | parloa/stamps-catalog | Central catalog of stamp instances |
+| `stamps-release-channels/` | parloa/stamps-release-channels | Kubernetes release channel management |
+| `claudes-kitchen/` | parloa/claudes-kitchen | Battle-tested recipes, skills, and plugins for Claude |
+| `open-kitchen/` | parloa/open-kitchen | Tool-agnostic agent intelligence library |
+| `engineering-catalog/` | parloa/engineering-catalog | Central people/team catalog syncing HiBob data |
+| `parloa-terraform-modules/` | parloa/parloa-terraform-modules | Private registry of reusable Terraform modules |
+| `cursor-self-hosted-agent/` | parloa/cursor-self-hosted-agent | Agent guardrails, hooks, policy-gate MCP, custom skills/rules |
+
+## Working with repos
+
+- Each subdirectory is an independent git clone with its own `.git`. Always `cd` into the repo directory before running git commands.
+- Branches, commits, and pushes happen per-repo, not at the workspace root.
+- Each repo may have its own `AGENTS.md`, `CLAUDE.md`, or `openspec/AGENTS.md` with repo-specific instructions. Read those before making changes.
+
+## Conventions
+
+- Infrastructure code uses OpenTofu/Terraform with Terramate orchestration.
+- In `parloa-infra-pre-stamp/`: do not edit `*.tm.hcl` files directly. Modify the templates, then run `uv run scripts/generate-terramate-stacks.py` followed by `terramate generate` and `terramate fmt`.
+- Stamps are defined as YAML manifests in `stamps-catalog/stamps/`.
+- Release channels are managed in `stamps-release-channels/`.
+
+## Git workflow
+
+- Create feature branches, never push directly to `main`.
+- Follow existing commit message conventions in each repo.
+- Run linters and formatters before committing.
