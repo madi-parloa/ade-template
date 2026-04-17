@@ -15,7 +15,7 @@ while read -r url; do
       CLONE_FAILURES=$((CLONE_FAILURES + 1))
     fi
   fi
-done < <(grep -Ev '^\s*(#|$)' portfolio.txt)
+done < <(grep -Ev '^\s*(#|$)' ade-repos.txt)
 
 if [ "$CLONE_FAILURES" -gt 0 ]; then
   echo "    $CLONE_FAILURES repo(s) failed to clone — continuing with the rest"
@@ -40,5 +40,4 @@ if [ -d open-kitchen ]; then
   }
 fi
 
-echo "==> ADE setup complete. Opening in Cursor..."
-cursor .
+echo "==> ADE install complete."
