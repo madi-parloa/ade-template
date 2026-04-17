@@ -3,6 +3,11 @@ set -euo pipefail
 
 CLONE_FAILURES=0
 
+if [ ! -f ade-repos.txt ]; then
+  echo "==> ERROR: ade-repos.txt not found. Nothing to clone."
+  exit 1
+fi
+
 echo "==> Cloning portfolio repos..."
 while read -r url; do
   dir="$(basename "$url" .git)"

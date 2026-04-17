@@ -3,9 +3,15 @@ _subdirectory: template
 
 _tasks:
   - >-
-    {% if portfolio_file %}cp {{ portfolio_file }} ade-repos.txt{% endif %}
-  - "bash ade-install.sh"
-  - "/Applications/Cursor.app/Contents/MacOS/Cursor \"$(pwd)\" &>/dev/null &"
+    {% if portfolio_file %}cp "{{ portfolio_file }}" ade-repos.txt{% endif %}
+  - command: "bash ade-install.sh"
+    when: "{{ _copier_operation == 'copy' }}"
+  - command: "git init"
+    when: "{{ _copier_operation == 'copy' }}"
+  - "git add -A"
+  - "git commit --no-gpg-sign --allow-empty -m 'ADE scaffold from template {{ _copier_conf.version }}'"
+  - command: "/Applications/Cursor.app/Contents/MacOS/Cursor \"$(pwd)\" &>/dev/null &"
+    when: "{{ _copier_operation == 'copy' }}"
 
 ade_name:
   type: str
@@ -19,6 +25,5 @@ description:
 
 portfolio_file:
   type: str
-  help: Path to a custom repo list (one git URL per line). Leave empty to use the
-    default Parloa portfolio.
+  help: "Path to a custom repo list (one git URL per line, absolute path). Leave empty for default Parloa portfolio."
   default: ""
