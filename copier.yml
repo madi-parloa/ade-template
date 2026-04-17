@@ -8,7 +8,7 @@ _tasks:
     when: "{{ _copier_operation == 'copy' }}"
   - command: "git init && git add -A && git commit --no-gpg-sign -m 'ADE scaffold'"
     when: "{{ _copier_operation == 'copy' }}"
-  - command: 'open -a Cursor "$(pwd)/$(basename "$(pwd)").code-workspace"'
+  - command: "open -a Cursor '{{ ade_name }}.code-workspace'"
     when: "{{ _copier_operation == 'copy' }}"
 
 ade_name:
