@@ -59,13 +59,18 @@ The git repo is local only — no remote.
 
 Seven files: ARCHITECTURE, CONCERNS, CONVENTIONS, INTEGRATIONS, STACK, STRUCTURE, TESTING. All produced by `/gsd-map-codebase` on 2026-04-07.
 
-## D-007: ade-repos.txt stays in output; ade-install.sh removed in favor of _tasks
+## D-007: ade-repos.txt stays in output; ade-install.sh removed from template
 
-**Decision:** Keep `ade-repos.txt` in the ADE (not hidden or deleted after use). The separate `ade-install.sh` script was removed; its clone loop and GSD install now live directly in copier `_tasks`.
+**Decision:** Keep `ade-repos.txt` in the ADE (not hidden or deleted after use). The separate `ade-install.sh` script was removed from the template; its clone loop and GSD install now live directly in copier `_tasks` and run **only on first scaffold** (`copier copy`), not on `copier update`.
 
 **Context:** Early iteration tried render → run → delete. User said: "might as well keep them, just rename to something understandable." The `ade-` prefix was chosen to make clear `ade-repos.txt` belongs to the ADE template system, not to any repo in the portfolio.
 
-Initially `ade-install.sh` shipped alongside as a re-runnable sync tool: users could edit `ade-repos.txt` and re-run the script to clone new repos / pull existing ones without touching copier. That split was later consolidated — the clone loop and `npx get-shit-done-cc` call moved into copier `_tasks` (unguarded by `_copier_operation`), making `uvx copier update --trust` the sole sync entry point. Trade-off: `copier update` redundantly runs the sync in its internal temp render directories, but it removes a file from the output and eliminates the "which of these two commands do I need?" friction. See D-009 for the guard semantics.
+Version history of the install flow:
+1. **v0.1.x – v0.6.x:** `ade-install.sh` shipped as a re-runnable sync tool. Users could edit `ade-repos.txt` and re-run `bash ade-install.sh` to clone new repos / pull existing ones without touching copier. `copier copy` invoked the script via a `_tasks` entry guarded by `_copier_operation == 'copy'`.
+2. **v0.7.0:** The script was inlined into unguarded `_tasks` so that `copier update` would also re-sync the portfolio and GSD. This made `uvx copier update --trust` the single entry point for both template updates and re-sync. It turned out to run the sync + GSD install **three times** per update because copier's double-render algorithm executes `_tasks` in (a) the "old baseline" temp render, (b) the "new target" temp render, and (c) the real target project. With a realistic portfolio this was ~30–90s of redundant `npx get-shit-done-cc` downloads plus potential `git clone` storms into throwaway temp directories. See D-009 for the underlying copier behavior.
+3. **v0.7.1+ (current):** Sync and GSD install were re-guarded with `_copier_operation == 'copy'`. They now run only on first scaffold. `copier update` is purely a template/docs refresh — it does not touch the portfolio or GSD. Re-sync is an explicit user action (manual `git pull` per repo, or re-run `npx -y get-shit-done-cc@latest --local --cursor` for GSD, or use whatever sync tooling the user prefers).
+
+**Trade-off:** Users who edit `ade-repos.txt` to add/remove repos must manually clone/remove the corresponding directories — there's no single command that syncs. Accepted because the redundancy in v0.7.0's design had real cost (wall time, bandwidth, and output noise), and the previous design's extra step (`bash ade-install.sh`) was a small papercut, not a workflow blocker.
 
 ## D-008: Answers file for copier update
 
@@ -73,21 +78,26 @@ Initially `ade-install.sh` shipped alongside as a re-runnable sync tool: users c
 
 **Context:** Copier does NOT auto-generate `.copier-answers.yml` unless the template explicitly includes a Jinja file with that name. Discovered when the answers file was missing from scaffolded ADEs. Without it, `copier update` can't determine which template version was used or what answers were given.
 
-## D-009: Selective _copier_operation guards
+## D-009: All scaffolding `_tasks` guarded by `_copier_operation == 'copy'`
 
-**Decision:** `git init` and Cursor launch are guarded by `when: "{{ _copier_operation == 'copy' }}"`. The portfolio sync and GSD install tasks are deliberately unguarded so they run on both `copier copy` and `copier update`.
+**Decision:** Every `_tasks` entry that does non-trivial work (portfolio sync, GSD install, `git init`, Cursor launch) is guarded by `when: "{{ _copier_operation == 'copy' }}"` so it runs only on first scaffold. The only unguarded entry is the trivial `cp "{{ portfolio_file }}" ade-repos.txt` — a no-op when `portfolio_file` is empty, and cheap even when it's set.
 
-**Context:** `_tasks` run during both copy and update. Earlier versions guarded every task with `_copier_operation == 'copy'` and shipped a separate `ade-install.sh` for re-sync. That was consolidated (see D-007): sync + GSD now run on update too, making `copier update` a one-command refresh.
+**Context:** Copier's `update` algorithm does a **double-render** to compute a structural 3-way diff:
 
-Still guarded (must only run on first scaffold):
-- `git init && git add -A && git commit` — unguarded, this fails in copier's internal temp directory during update with `fatal: not a git repository` (discovered during end-to-end testing). On copy, it establishes the `.git/` that copier update requires (D-004).
-- Cursor launch — unguarded, Cursor would re-open on every template update.
+1. It re-renders the **old template version** (from `.copier-answers.yml`'s `_commit`) into an internal temp directory using the stored answers — executing `_tasks` there.
+2. It re-renders the **new template version** into a second temp directory using the current answers — executing `_tasks` there too.
+3. It diffs (1) against (2), applies the delta to the real project, and executes `_tasks` in the real target.
 
-Deliberately unguarded (safe + desired to run on update):
-- Portfolio sync (clone/pull loop) — idempotent. Runs redundantly inside copier's internal temp render directories during update; this is wasted work but harmless (clones land in a temp dir that copier discards).
-- GSD install (`npx -y get-shit-done-cc@latest --local --cursor`) — idempotent. Same caveat about temp-dir redundancy.
+This means any unguarded `_tasks` entry runs **three times** during a single `copier update`. v0.7.0 accepted this as "redundant but harmless" for the sync + GSD install; it turned out to be ~30–90s of wasted `npx get-shit-done-cc` downloads per update, plus potential `git clone` storms into temp directories that copier immediately discards. See D-007 for the full version history.
 
-Trade-off: `copier update` does more work than strictly necessary (sync runs in temp renders plus at the real target), but removes the need for a separate re-sync script. Accepted.
+Specific guard rationale:
+
+- **`git init && git add -A && git commit`** — must be copy-only: during update, there's no `.git/` in copier's internal temp directories, and `git add -A` would fail with `fatal: not a git repository` (discovered during end-to-end testing, original v0.1.x motivation for D-004). On copy, this establishes the `.git/` that `copier update` requires.
+- **Cursor launch** — must be copy-only: otherwise Cursor would re-open on every template update.
+- **Portfolio sync (clone/pull loop)** — copy-only. Even though the commands are idempotent in the real target, temp-render executions waste wall time, bandwidth, and output noise. Re-syncing after edits to `ade-repos.txt` is now a manual user action; see D-007.
+- **GSD install (`npx -y get-shit-done-cc@latest --local --cursor`)** — copy-only, same reasoning. `@latest` forces a registry check on every invocation, making three-time execution particularly wasteful.
+
+**Trade-off:** `copier update` no longer re-syncs the portfolio or reinstalls GSD. Users who add/remove repos via `ade-repos.txt` must do the corresponding `git clone` / directory removal themselves. The alternative (v0.7.0's unguarded design) automated that convenience at the cost of triple-executing both tasks during every update, which was the worse trade-off.
 
 ## D-010: Include ade-template in its own portfolio
 

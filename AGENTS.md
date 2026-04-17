@@ -11,7 +11,7 @@ This is a Copier template repo, not a runtime project. It scaffolds Agent Dev En
 - `template/` — Everything copier renders into an ADE:
   - `.jinja` files are rendered with variable substitution (suffix stripped in output)
   - Non-`.jinja` files are copied verbatim
-  - Portfolio clone/pull and GSD workspace-local install are driven by copier `_tasks` in `copier.yml` (not a separate shell script). Kitchen setup scripts (`claudes-kitchen`, `open-kitchen`) are deliberately NOT run — see `docs/DECISIONS.md` D-013.
+  - Portfolio clone/pull and GSD workspace-local install are driven by copier `_tasks` in `copier.yml` (not a separate shell script), and both are guarded to first-scaffold only (`copier copy`). `copier update` does not re-sync. Kitchen setup scripts (`claudes-kitchen`, `open-kitchen`) are deliberately NOT run — see `docs/DECISIONS.md` D-013.
   - `ade-repos.txt` lists the default repo portfolio
   - `.planning/codebase/*.md` are pre-seeded GSD intel files
 
@@ -26,7 +26,9 @@ This is a Copier template repo, not a runtime project. It scaffolds Agent Dev En
 
 ## Keeping an ADE up to date
 
-One step: `uvx copier update --trust` — pulls latest template changes (new repos in portfolio, updated context files, etc.) via smart 3-way merge AND re-runs the portfolio sync + GSD install `_tasks` (idempotent). Kitchen setup scripts are not run, per D-013.
+`uvx copier update --trust` refreshes template-managed files (AGENTS.md, `.planning/codebase/*`, rendered Cursor workspace, etc.) via smart 3-way merge. It does NOT re-sync the portfolio or reinstall GSD — those `_tasks` are guarded to first-scaffold only per D-009 (copier's double-render algorithm executes tasks three times per update, which made unguarded sync costly; see D-007 for history).
+
+Portfolio sync after `ade-repos.txt` edits is a manual user action — see the "Keeping an ADE up to date" section in `README.md` for the recommended one-liners, or have users run `git clone` / `git pull` per repo. Kitchen setup scripts are never run, per D-013.
 
 ## Editing template files
 

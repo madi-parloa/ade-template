@@ -28,18 +28,37 @@ Copier prompts for a name and description, renders the template, clones all repo
 
 ## Keeping an ADE up to date
 
-One command does it all — pulls latest template changes, clones any new repos, pulls latest on existing ones, and re-installs GSD (idempotent):
+**Template/docs refresh** — to pull new AGENTS.md guidance, updated `.planning/codebase/*` intel, or changes to the rendered Cursor workspace file:
 
 ```bash
 cd ~/path/to/my-ade
 uvx copier update --trust
 ```
 
-The portfolio sync and GSD install run as copier `_tasks` on both `copier copy` and `copier update`, so there's no separate re-sync step.
+`copier update` is a pure template/docs refresh. It does NOT re-sync the portfolio or reinstall GSD (those `_tasks` are guarded to first-scaffold only — see `docs/DECISIONS.md` D-009 for why).
+
+**Portfolio changes** — if you edited `ade-repos.txt` (or the template added new repos via a `copier update`), clone/remove the corresponding directories manually:
+
+```bash
+# Example: pick up newly added repos from ade-repos.txt
+while read -r url; do
+  dir="$(basename "$url" .git)"
+  [ -d "$dir" ] || git clone "$url" "$dir"
+done < <(grep -Ev '^\s*(#|$)' ade-repos.txt)
+
+# Update existing clones
+for d in */; do [ -d "$d/.git" ] && git -C "$d" pull --ff-only; done
+```
+
+**GSD refresh** — to update GSD itself:
+
+```bash
+npx -y get-shit-done-cc@latest --local --cursor
+```
 
 ## Customizing
 
-1. **Different repos** — re-run copier with `--data portfolio_file=/path/to/my-repos.txt`, or edit `ade-repos.txt` and run `uvx copier update --trust`.
+1. **Different repos** — re-run copier with `--data portfolio_file=/path/to/my-repos.txt`, or edit `ade-repos.txt` (see the manual sync snippet above).
 2. **Fork this template** — `gh repo fork madi-parloa/ade-template` and scaffold from your fork.
 
 ## Post-install notes

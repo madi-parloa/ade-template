@@ -31,6 +31,7 @@ _tasks:
         if [ "$CLONE_FAILURES" -gt 0 ]; then
           echo "    $CLONE_FAILURES repo(s) failed to clone — continuing with the rest"
         fi
+    when: "{{ _copier_operation == 'copy' }}"
   - command:
       - bash
       - -c
@@ -38,6 +39,7 @@ _tasks:
         set -euo pipefail
         echo "==> Installing GSD workspace-locally..."
         npx -y get-shit-done-cc@latest --local --cursor
+    when: "{{ _copier_operation == 'copy' }}"
   - command: "git init && git add -A && git commit --no-gpg-sign -m 'ADE scaffold'"
     when: "{{ _copier_operation == 'copy' }}"
   - command: "open -a Cursor '{{ ade_name }}.code-workspace'"

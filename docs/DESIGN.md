@@ -50,17 +50,16 @@ The repo root holds `copier.yml` and `README.md` (copier config + landing page).
 
 `copier update` requires the destination to be a git repo (hard requirement — the source code raises `UserMessageError("Updating is only supported in git-tracked subprojects.")`). This is a local `.git/` only — no remote, no push.
 
-`_tasks` split into two groups:
+All non-trivial `_tasks` are guarded by `when: "{{ _copier_operation == 'copy' }}"` so they run **only on first scaffold**:
 
-**Run on both copy and update** (idempotent, form the sync pipeline):
 - Portfolio clone/pull loop — reads `ade-repos.txt`, clones missing, `git pull --ff-only` existing. Kitchen installers (`claudes-kitchen`, `open-kitchen`) are deliberately skipped; see D-013.
 - GSD workspace-local install — `npx -y get-shit-done-cc@latest --local --cursor`.
-
-**Guarded by `when: "{{ _copier_operation == 'copy' }}"`** (first scaffold only):
 - `git init && git add -A && git commit` — creates the local git repo.
 - Cursor launch — opens the ADE.
 
-This means `copier update` is the single entry point for both "pull latest template changes" and "re-sync portfolio / GSD" — no separate re-sync script.
+`copier update` is therefore a pure template/docs refresh. It does not touch the portfolio or GSD. Users who edit `ade-repos.txt` to add or remove repos must manually clone/remove the corresponding directories.
+
+This strict copy-only guarding is a deliberate rollback from v0.7.0's "unguarded sync runs on update too" design. See D-007 and D-009 for the version history and the copier double-render behavior that made the v0.7.0 design costly in practice.
 
 ### 5. Portfolio as a copier input with file override
 
@@ -83,11 +82,11 @@ The seven GSD codebase intel files (`ARCHITECTURE.md`, `STACK.md`, `STRUCTURE.md
 ### 7. ade-repos.txt stays in the output
 
 Early iterations tried to hide this file (render → run → delete). Kept because:
-- Users edit `ade-repos.txt` to add/remove repos and then re-run `copier update --trust` to sync.
+- Users edit `ade-repos.txt` to tweak the portfolio (and re-running `copier update --trust` re-renders the Cursor workspace file accordingly).
 - The `ade-` prefix makes its purpose clear in the directory listing.
 - Copier manages it across template updates.
 
-An earlier design kept a companion `ade-install.sh` script for the same reason (manual re-sync), but the clone loop and GSD install were later inlined into copier `_tasks` so `copier update` is the sole sync entry point. See D-007 for the full history.
+The install flow that reads this file has gone through three iterations: a re-runnable companion `ade-install.sh` (v0.1.x–v0.6.x), inlined unguarded `_tasks` making `copier update` the sync entry point (v0.7.0), and finally inlined `_tasks` guarded to copy-only (v0.7.1+). See D-007 for the full rationale and D-009 for the copier double-render behavior that motivated the v0.7.0 → v0.7.1 revert.
 
 ## Architecture
 
@@ -121,21 +120,23 @@ _min_copier_version: "9.0.0"
 _subdirectory: template           # template content lives under template/
 
 _tasks:
-  # 1. Override ade-repos.txt if user provided a custom file (runs on copy AND update)
+  # 1. Override ade-repos.txt if user provided a custom file (runs on copy AND update; no-op when unset)
   - >-
     {% if portfolio_file %}cp "{{ portfolio_file }}" ade-repos.txt{% endif %}
-  # 2. Portfolio sync: clone missing, pull existing (runs on copy AND update; kitchen installers skipped)
+  # 2. Portfolio sync: clone missing, pull existing (first scaffold only; kitchen installers skipped)
   - command:
       - bash
       - -c
       - |
         # ...clone/pull loop reading ade-repos.txt...
-  # 3. GSD workspace-local install (runs on copy AND update; idempotent)
+    when: "{{ _copier_operation == 'copy' }}"
+  # 3. GSD workspace-local install (first scaffold only)
   - command:
       - bash
       - -c
       - |
         npx -y get-shit-done-cc@latest --local --cursor
+    when: "{{ _copier_operation == 'copy' }}"
   # 4. Init git for copier update support (first scaffold only)
   - command: "git init && git add -A && git commit --no-gpg-sign -m 'ADE scaffold'"
     when: "{{ _copier_operation == 'copy' }}"
@@ -144,7 +145,7 @@ _tasks:
     when: "{{ _copier_operation == 'copy' }}"
 ```
 
-The `when: "{{ _copier_operation == 'copy' }}"` guard on `git init` and the Cursor launch is critical — without it, `git add -A` would fail inside copier's internal temp directories during update (no `.git/` there), and Cursor would re-open on every template update. The sync + GSD tasks deliberately run on both operations so `copier update` is the single re-sync entry point; per D-009, this trades a small amount of redundant work in update's internal temp renders for removing the need for a separate install script.
+Every non-trivial task is guarded by `when: "{{ _copier_operation == 'copy' }}"`. This is strict because copier's update algorithm re-executes `_tasks` three times per update (old-baseline temp render, new-target temp render, and real project — the double-render path; see D-009). Running portfolio sync or `npx get-shit-done-cc` three times per update costs real wall time and bandwidth, so these tasks run only on first scaffold. `copier update` is therefore a pure template/docs refresh.
 
 ## Known limitations (v1)
 
