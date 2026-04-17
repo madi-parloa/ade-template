@@ -28,37 +28,28 @@ Copier prompts for a name and description, renders the template, clones all repo
 
 ## Keeping an ADE up to date
 
-**Template/docs refresh** — to pull new AGENTS.md guidance, updated `.planning/codebase/*` intel, or changes to the rendered Cursor workspace file:
-
 ```bash
 cd ~/path/to/my-ade
 uvx copier update --trust
 ```
 
-`copier update` is a pure template/docs refresh. It does NOT re-sync the portfolio or reinstall GSD (those `_tasks` are guarded to first-scaffold only — see `docs/DECISIONS.md` D-009 for why).
+`copier update` is the single entry point. It:
 
-**Portfolio changes** — if you edited `ade-repos.txt` (or the template added new repos via a `copier update`), clone/remove the corresponding directories manually:
+1. Merges template/docs changes (AGENTS.md, `.planning/codebase/*`, rendered Cursor workspace, etc.) via 3-way diff.
+2. Clones any repos newly added to `ade-repos.txt`. Already-cloned repos are **not** `git pull`'d — safe even if you have WIP on feature branches.
+3. Refreshes GSD (`npx -y get-shit-done-cc@latest --local --cursor`).
+
+See `docs/DECISIONS.md` D-007 / D-009 for the `_tasks` policy history and the copier double-render behavior that shapes it.
+
+**Pulling existing clones** — if you want to update all already-cloned repos (not just add new ones), run this one-liner yourself. It's deliberately not automatic because `git pull` over a user's WIP is unsafe:
 
 ```bash
-# Example: pick up newly added repos from ade-repos.txt
-while read -r url; do
-  dir="$(basename "$url" .git)"
-  [ -d "$dir" ] || git clone "$url" "$dir"
-done < <(grep -Ev '^\s*(#|$)' ade-repos.txt)
-
-# Update existing clones
 for d in */; do [ -d "$d/.git" ] && git -C "$d" pull --ff-only; done
-```
-
-**GSD refresh** — to update GSD itself:
-
-```bash
-npx -y get-shit-done-cc@latest --local --cursor
 ```
 
 ## Customizing
 
-1. **Different repos** — re-run copier with `--data portfolio_file=/path/to/my-repos.txt`, or edit `ade-repos.txt` (see the manual sync snippet above).
+1. **Different repos** — re-run copier with `--data portfolio_file=/path/to/my-repos.txt`, or edit `ade-repos.txt` and run `uvx copier update --trust` to clone any newly listed repos.
 2. **Fork this template** — `gh repo fork madi-parloa/ade-template` and scaffold from your fork.
 
 ## Post-install notes

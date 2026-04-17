@@ -7,12 +7,13 @@ This is a Copier template repo, not a runtime project. It scaffolds Agent Dev En
 - `copier.yml` — Copier configuration: questions, `_tasks`, `_subdirectory` setting
 - `README.md` — GitHub landing page
 - `docs/DESIGN.md` — Full design document with motivation and architecture
-- `docs/DECISIONS.md` — Decision log (D-001 through D-013) with context for every choice
+- `docs/DECISIONS.md` — Decision log (D-001 through D-014) with context for every choice
 - `template/` — Everything copier renders into an ADE:
   - `.jinja` files are rendered with variable substitution (suffix stripped in output)
   - Non-`.jinja` files are copied verbatim
-  - Portfolio clone/pull and GSD workspace-local install are driven by copier `_tasks` in `copier.yml` (not a separate shell script), and both are guarded to first-scaffold only (`copier copy`). `copier update` does not re-sync. Kitchen setup scripts (`claudes-kitchen`, `open-kitchen`) are deliberately NOT run — see `docs/DECISIONS.md` D-013.
+  - Portfolio sync and GSD workspace-local install are driven by copier `_tasks` in `copier.yml` (not a separate shell script). Both run on `copier copy` AND `copier update` — sync is clone-if-missing (never pulls existing repos), and GSD install tracks `@latest`. `git init` and Cursor launch are guarded to first-scaffold only. Kitchen setup scripts (`claudes-kitchen`, `open-kitchen`) are deliberately NOT run — see `docs/DECISIONS.md` D-013. See D-007 and D-009 for the full `_tasks` policy.
   - `ade-repos.txt` lists the default repo portfolio
+  - `.gitignore` uses an allowlist pattern (ignore every top-level dir except `.planning/`) — see D-014
   - `.planning/codebase/*.md` are pre-seeded GSD intel files
 
 ## Working on this repo
@@ -26,9 +27,9 @@ This is a Copier template repo, not a runtime project. It scaffolds Agent Dev En
 
 ## Keeping an ADE up to date
 
-`uvx copier update --trust` refreshes template-managed files (AGENTS.md, `.planning/codebase/*`, rendered Cursor workspace, etc.) via smart 3-way merge. It does NOT re-sync the portfolio or reinstall GSD — those `_tasks` are guarded to first-scaffold only per D-009 (copier's double-render algorithm executes tasks three times per update, which made unguarded sync costly; see D-007 for history).
+`uvx copier update --trust` refreshes template-managed files (AGENTS.md, `.planning/codebase/*`, rendered Cursor workspace, etc.) via smart 3-way merge **and** re-runs portfolio sync + GSD install. New repos added to `ade-repos.txt` in the template are cloned on update. Already-cloned repos are never `git pull`'d — the sync loop is clone-if-missing only, so it's safe to run even when the user has WIP on feature branches (see D-007). GSD install tracks `@latest` on every update (3× per update due to copier's double-render — accepted cost, see D-009).
 
-Portfolio sync after `ade-repos.txt` edits is a manual user action — see the "Keeping an ADE up to date" section in `README.md` for the recommended one-liners, or have users run `git clone` / `git pull` per repo. Kitchen setup scripts are never run, per D-013.
+Users wanting to pull existing clones run the one-liner in the scaffolded `README.md` themselves. Kitchen setup scripts are never run, per D-013.
 
 ## Editing template files
 
@@ -39,7 +40,7 @@ Portfolio sync after `ade-repos.txt` edits is a manual user action — see the "
 ## Editing copier.yml
 
 - `_tasks` run in the output directory, not in this repo.
-- `_tasks` run during BOTH `copier copy` AND `copier update`. Use `when: "{{ _copier_operation == 'copy' }}"` to restrict tasks to first scaffold only. See D-009.
-- During `copier update`, copier also runs tasks in internal temp directories for diff computation. Tasks that assume a git repo (like `git add`) must be guarded.
+- `_tasks` run during BOTH `copier copy` AND `copier update`, and are executed **three times** on every update (old-baseline temp render, new-target temp render, real target) due to copier's double-render algorithm. Any unguarded task must therefore be idempotent and cheap on repeated invocation. Use `when: "{{ _copier_operation == 'copy' }}"` to restrict tasks to first scaffold only. See D-009 for the specific guard rationale per task.
+- During `copier update`, copier runs tasks in internal temp directories for diff computation. Tasks that assume a `.git/` in the working directory (like `git add`) MUST be guarded to copy-only or they fail in the temp renders.
 - Quote all Jinja variables interpolated into shell commands: `cp "{{ portfolio_file }}"` not `cp {{ portfolio_file }}`.
 - `copier update` requires the destination to be a git repo. The template's `_tasks` handle `git init` on first scaffold. See D-004.

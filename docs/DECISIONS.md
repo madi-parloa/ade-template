@@ -61,16 +61,17 @@ Seven files: ARCHITECTURE, CONCERNS, CONVENTIONS, INTEGRATIONS, STACK, STRUCTURE
 
 ## D-007: ade-repos.txt stays in output; ade-install.sh removed from template
 
-**Decision:** Keep `ade-repos.txt` in the ADE (not hidden or deleted after use). The separate `ade-install.sh` script was removed from the template; its clone loop and GSD install now live directly in copier `_tasks` and run **only on first scaffold** (`copier copy`), not on `copier update`.
+**Decision:** Keep `ade-repos.txt` in the ADE (not hidden or deleted after use). The separate `ade-install.sh` script was removed from the template; its clone loop and GSD install now live directly in copier `_tasks`. Both run on `copier copy` **and** `copier update`, but the sync loop is carefully constrained to be idempotent and cheap on repeated execution (see D-009).
 
 **Context:** Early iteration tried render → run → delete. User said: "might as well keep them, just rename to something understandable." The `ade-` prefix was chosen to make clear `ade-repos.txt` belongs to the ADE template system, not to any repo in the portfolio.
 
 Version history of the install flow:
 1. **v0.1.x – v0.6.x:** `ade-install.sh` shipped as a re-runnable sync tool. Users could edit `ade-repos.txt` and re-run `bash ade-install.sh` to clone new repos / pull existing ones without touching copier. `copier copy` invoked the script via a `_tasks` entry guarded by `_copier_operation == 'copy'`.
-2. **v0.7.0:** The script was inlined into unguarded `_tasks` so that `copier update` would also re-sync the portfolio and GSD. This made `uvx copier update --trust` the single entry point for both template updates and re-sync. It turned out to run the sync + GSD install **three times** per update because copier's double-render algorithm executes `_tasks` in (a) the "old baseline" temp render, (b) the "new target" temp render, and (c) the real target project. With a realistic portfolio this was ~30–90s of redundant `npx get-shit-done-cc` downloads plus potential `git clone` storms into throwaway temp directories. See D-009 for the underlying copier behavior.
-3. **v0.7.1+ (current):** Sync and GSD install were re-guarded with `_copier_operation == 'copy'`. They now run only on first scaffold. `copier update` is purely a template/docs refresh — it does not touch the portfolio or GSD. Re-sync is an explicit user action (manual `git pull` per repo, or re-run `npx -y get-shit-done-cc@latest --local --cursor` for GSD, or use whatever sync tooling the user prefers).
+2. **v0.7.0:** The script was inlined into unguarded `_tasks` so that `copier update` would also re-sync the portfolio and GSD. This made `uvx copier update --trust` the single entry point for both template updates and re-sync. The loop did clone-**or-pull**: missing repos were cloned, existing repos were `git pull --ff-only`'d. It turned out to run the sync + GSD install **three times** per update because copier's double-render algorithm executes `_tasks` in (a) the "old baseline" temp render, (b) the "new target" temp render, and (c) the real target project. With a realistic portfolio this was ~30–90s of redundant network traffic: 3× `npx get-shit-done-cc` downloads plus 3× `git pull` on every repo, for zero user benefit (the temp renders are discarded). See D-009 for the copier behavior.
+3. **v0.7.1:** Sync and GSD install were re-guarded with `_copier_operation == 'copy'`. They ran only on first scaffold. This killed the 3× cost but regressed a real use case: adding a new repo to `ade-repos.txt` in the template no longer propagated to existing ADEs on `copier update`. Users had to run a manual clone snippet from the README. The v0.7.0 design had the right semantics (update = sync) but the wrong implementation (pull everything).
+4. **v0.7.2+ (current):** Sync and GSD install are **unguarded again**, but the sync loop is rewritten as **clone-if-missing, never pull**. Existing repos are never touched. Template additions to `ade-repos.txt` propagate on `copier update` via one clone per new repo. Under the 3× double-render execution, the first iteration clones the missing repo and the other two see `[ -d "$dir" ]` and skip — net cost is one clone, not three. Users who want to update already-cloned repos run the explicit pull one-liner documented in the scaffolded `README.md` — this is deliberately not automatic because `git pull` on a user's WIP branch is the class of thing a scaffolder should never do silently.
 
-**Trade-off:** Users who edit `ade-repos.txt` to add/remove repos must manually clone/remove the corresponding directories — there's no single command that syncs. Accepted because the redundancy in v0.7.0's design had real cost (wall time, bandwidth, and output noise), and the previous design's extra step (`bash ade-install.sh`) was a small papercut, not a workflow blocker.
+**Trade-off:** `copier update` no longer auto-pulls existing repos. Users wanting to refresh everything run `for d in */; do [ -d "$d/.git" ] && git -C "$d" pull --ff-only; done`. Accepted because: (a) auto-pulling over a user's uncommitted work is strictly worse than requiring an explicit action, and (b) the original user-visible pain point — "new repo in template doesn't land on update" — is fixed.
 
 ## D-008: Answers file for copier update
 
@@ -78,26 +79,33 @@ Version history of the install flow:
 
 **Context:** Copier does NOT auto-generate `.copier-answers.yml` unless the template explicitly includes a Jinja file with that name. Discovered when the answers file was missing from scaffolded ADEs. Without it, `copier update` can't determine which template version was used or what answers were given.
 
-## D-009: All scaffolding `_tasks` guarded by `_copier_operation == 'copy'`
+## D-009: Which `_tasks` are guarded, and why
 
-**Decision:** Every `_tasks` entry that does non-trivial work (portfolio sync, GSD install, `git init`, Cursor launch) is guarded by `when: "{{ _copier_operation == 'copy' }}"` so it runs only on first scaffold. The only unguarded entry is the trivial `cp "{{ portfolio_file }}" ade-repos.txt` — a no-op when `portfolio_file` is empty, and cheap even when it's set.
+**Decision:** The guard rule is **"guard destructive or one-shot tasks; leave idempotent tasks unguarded so template evolution propagates."**
 
-**Context:** Copier's `update` algorithm does a **double-render** to compute a structural 3-way diff:
+| Task | Guarded to `copy` only? | Why |
+|---|---|---|
+| `cp "{{ portfolio_file }}" ade-repos.txt` | no | Trivial; no-op when `portfolio_file` is empty. |
+| Portfolio sync (clone-if-missing loop) | **no** | Must propagate new repos added to `ade-repos.txt` on update. Idempotent: 3× execution results in 1 clone + 2 no-op `[ -d ]` checks. See D-007. |
+| GSD install (`npx -y get-shit-done-cc@latest --local --cursor`) | **no** | `@latest` is the point — template bumps should land on existing ADEs. 3× execution = 3× registry check, which is the acknowledged cost. |
+| `git init && git add -A && git commit` | **yes** | On copy, establishes the `.git/` that `copier update` requires. On update there's no `.git/` in copier's internal temp directories and `git add -A` would fail with `fatal: not a git repository` (original v0.1.x motivation for D-004). |
+| `open -a Cursor '{{ ade_name }}.code-workspace'` | **yes** | Otherwise Cursor would re-launch on every template update. |
 
-1. It re-renders the **old template version** (from `.copier-answers.yml`'s `_commit`) into an internal temp directory using the stored answers — executing `_tasks` there.
-2. It re-renders the **new template version** into a second temp directory using the current answers — executing `_tasks` there too.
-3. It diffs (1) against (2), applies the delta to the real project, and executes `_tasks` in the real target.
+**Context — the copier double-render algorithm:** Copier's `update` does a structural 3-way merge by re-rendering the template twice:
 
-This means any unguarded `_tasks` entry runs **three times** during a single `copier update`. v0.7.0 accepted this as "redundant but harmless" for the sync + GSD install; it turned out to be ~30–90s of wasted `npx get-shit-done-cc` downloads per update, plus potential `git clone` storms into temp directories that copier immediately discards. See D-007 for the full version history.
+1. Re-render the **old baseline** version (from `.copier-answers.yml`'s `_commit`) into an internal temp directory, executing `_tasks` there.
+2. Re-render the **new target** version into a second temp directory, executing `_tasks` there too.
+3. Diff (1) against (2), apply the delta to the real project, execute `_tasks` in the real target.
 
-Specific guard rationale:
+Any unguarded `_tasks` entry runs **three times** per `copier update`. This constraint is the whole reason the guard/no-guard decision matters: you either ensure the task is idempotent and cheap on repeated invocation, or you guard it to `copy` only. There is no third option.
 
-- **`git init && git add -A && git commit`** — must be copy-only: during update, there's no `.git/` in copier's internal temp directories, and `git add -A` would fail with `fatal: not a git repository` (discovered during end-to-end testing, original v0.1.x motivation for D-004). On copy, this establishes the `.git/` that `copier update` requires.
-- **Cursor launch** — must be copy-only: otherwise Cursor would re-open on every template update.
-- **Portfolio sync (clone/pull loop)** — copy-only. Even though the commands are idempotent in the real target, temp-render executions waste wall time, bandwidth, and output noise. Re-syncing after edits to `ade-repos.txt` is now a manual user action; see D-007.
-- **GSD install (`npx -y get-shit-done-cc@latest --local --cursor`)** — copy-only, same reasoning. `@latest` forces a registry check on every invocation, making three-time execution particularly wasteful.
+**Version history:**
 
-**Trade-off:** `copier update` no longer re-syncs the portfolio or reinstalls GSD. Users who add/remove repos via `ade-repos.txt` must do the corresponding `git clone` / directory removal themselves. The alternative (v0.7.0's unguarded design) automated that convenience at the cost of triple-executing both tasks during every update, which was the worse trade-off.
+- **v0.7.0:** All sync/install tasks unguarded, but the sync loop did clone-**or-pull**. 3× execution caused 3× `git pull` on every existing repo per update (~30–90s of wasted network traffic) and 3× `npx get-shit-done-cc` downloads.
+- **v0.7.1:** Everything non-trivial guarded to `copy`. Killed the cost, but regressed propagation: new repos added to `ade-repos.txt` in the template no longer landed on existing ADEs via `copier update`. The "single entry point for updates" story was broken.
+- **v0.7.2+ (current):** Sync + GSD install unguarded again; sync rewritten as **clone-if-missing, never pull** so 3× execution is idempotent (1 clone + 2 skips per new repo). GSD install is still 3×, accepted as the cost of `@latest` tracking. `git init` and Cursor launch remain guarded for the reasons in the table above.
+
+**Trade-off:** `copier update` does not auto-pull existing repos (only clones new ones). Users wanting to refresh all existing clones run the explicit pull one-liner from the scaffolded `README.md`. This is deliberate: silently `git pull`-ing over a user's WIP branch is a class of side-effect a scaffolder should never produce.
 
 ## D-010: Include ade-template in its own portfolio
 
@@ -154,3 +162,32 @@ None of this is workspace-local. Running these installers as part of `copier cop
 - Remove the kitchen repos from `ade-repos.txt` entirely — rejected: their source is valuable as reference material for composing skills, and cloning a git repo is itself side-effect-free.
 
 **Trade-off:** Users who expected kitchens to be live after scaffolding must now run the installers themselves. The `README.md` and `docs/DESIGN.md` flag this clearly.
+
+## D-014: `.gitignore` allowlists `.planning/`, ignores every other top-level directory
+
+**Decision:** `template/.gitignore` ignores every top-level directory by default via `/*/`, then allowlists `.planning/` with `!/.planning/`. Individual portfolio repo names are not enumerated. Inside `.planning/`, GSD-volatile subdirs are re-ignored explicitly.
+
+**Context:** Prior versions enumerated every cloned repo in `.gitignore`:
+
+```
+parloa-infra/
+parloa-k8s/
+claudes-kitchen/
+...
+```
+
+This had two failure modes:
+
+1. **Missed entries caused gitlink pollution.** `ade-template/` was absent from the list, so during `_tasks` on first scaffold, `git add -A` tracked the freshly cloned `ade-template/` as a **gitlink** (`160000` mode) — git's way of recording a nested repo's HEAD pointer. On subsequent `copier update`, as the template's HEAD advanced (e.g., to `v0.7.1`), the working tree reported `ade-template` as modified, which tripped copier's "Destination repository is dirty; cannot continue" check. The user worked around this by deleting `ade-template/` from the destination — exactly the kind of manual unblock the template is supposed to prevent.
+2. **Maintenance burden.** Adding a new repo to `ade-repos.txt` required remembering to add it to `.gitignore` as well. Silent coupling; easy to forget; fails only on the second `copier update` after the miss.
+
+**Allowlist approach:** Invert the default. Ignore every top-level directory unconditionally (`/*/`), then surface only the template-managed ones with `!/.planning/`. Effects:
+
+- Every current and future repo in `ade-repos.txt` is ignored with no `.gitignore` edit.
+- `.cursor/` is ignored (no longer needs an explicit entry).
+- Template-managed **files** at root (`AGENTS.md`, `README.md`, `.copier-answers.yml`, `<ade>.code-workspace`, `ade-repos.txt`, etc.) are unaffected — `/*/` matches only directories.
+- `.planning/` is allowlisted; GSD-volatile subdirs inside it (`milestones/`, `phases/`, `intel/`, `research/`, `threads/`, `state/`) and two files (`config.json`, `ROADMAP.md`) are still ignored. Only `PROJECT.md` and `codebase/*.md` ship via the template.
+
+**Trade-off:** If someone genuinely wanted to track a cloned repo's working copy (e.g., ship it as part of the scaffolded project), they'd need to add an explicit `!/name/` allowlist. No current use case needs this, and doing so would be conceptually wrong — portfolio repos are external dependencies, not scaffolded content.
+
+**Gitlink cleanup for existing ADEs:** ADEs scaffolded before v0.7.2 already have nested repos tracked as gitlinks in their `.git/index`. After `copier update` brings in the new `.gitignore`, run `git rm --cached -r <repo-name>` (without `-f`) to drop each stale pointer; the working tree is untouched. The new `.gitignore` then keeps them out on every future `git add`.

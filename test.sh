@@ -63,8 +63,8 @@ folders = data.get("folders", [])
 settings = data.get("settings", {})
 problems = []
 
-if len(folders) != 15:
-    problems.append(f"expected 15 folders (14 portfolio + ADE root), got {len(folders)}")
+if len(folders) != 16:
+    problems.append(f"expected 16 folders (15 portfolio + ADE root), got {len(folders)}")
 if settings.get("git.autoRepositoryDetection") is not False:
     problems.append(
         f"git.autoRepositoryDetection should be False, "
@@ -109,8 +109,8 @@ python3 -c "
 import json
 with open('$WS') as f:
     data = json.load(f)
-assert len(data['folders']) == 15, 'folders count wrong after update'
-print('  ok: update preserved 15 folders')
+assert len(data['folders']) == 16, 'folders count wrong after update'
+print('  ok: update preserved 16 folders')
 "
 
 echo ""

@@ -33,6 +33,8 @@ Early iterations designed a custom `ade` CLI with `ade new`, `ade launch`, `ade 
 
 Install scripts must write to `<ade>/.cursor/`, not `~/.cursor/`. This gives per-ADE isolation using Cursor's native workspace-level config layer — different ADEs present different skill/rule/hook/MCP sets without needing shadow-HOME machinery.
 
+The scaffolded ADE's `.gitignore` allowlists `.planning/` and ignores every other top-level directory (`/*/`), so workspace-local tooling dirs like `.cursor/` never get accidentally committed to the ADE's own git history. Portfolio repos are also caught by the same pattern, which prevents them from being tracked as gitlinks (a failure mode that bit earlier versions — see D-014).
+
 GSD supports this via `npx -y get-shit-done-cc@latest --local --cursor`.
 
 Kitchen setup scripts (`claudes-kitchen/setup-cooking-environment.sh`, `open-kitchen/setup-cargo-jfrog.sh`) do NOT respect the working directory — they write to `$HOME/.cargo`, `$HOME/.claude`, `$HOME/CLAUDE.md`, `$HOME/.git-templates`, global git config, and (on Linux) apt-installed system packages. Running them during ADE scaffolding would violate workspace-local isolation. The kitchen repos are therefore cloned for reference but their installers are not auto-run (see D-013).
@@ -50,16 +52,21 @@ The repo root holds `copier.yml` and `README.md` (copier config + landing page).
 
 `copier update` requires the destination to be a git repo (hard requirement — the source code raises `UserMessageError("Updating is only supported in git-tracked subprojects.")`). This is a local `.git/` only — no remote, no push.
 
-All non-trivial `_tasks` are guarded by `when: "{{ _copier_operation == 'copy' }}"` so they run **only on first scaffold**:
+Guard rule for `_tasks`: guard destructive or one-shot tasks; leave idempotent tasks unguarded so template evolution propagates on `copier update`:
 
-- Portfolio clone/pull loop — reads `ade-repos.txt`, clones missing, `git pull --ff-only` existing. Kitchen installers (`claudes-kitchen`, `open-kitchen`) are deliberately skipped; see D-013.
-- GSD workspace-local install — `npx -y get-shit-done-cc@latest --local --cursor`.
-- `git init && git add -A && git commit` — creates the local git repo.
-- Cursor launch — opens the ADE.
+| Task | Guarded to `copy` only? | Runs on `copier update`? |
+|---|---|---|
+| Copy `portfolio_file` → `ade-repos.txt` (if provided) | no | yes (trivial, no-op when unset) |
+| Portfolio sync — **clone-if-missing** loop | no | yes (new repos land; existing repos untouched) |
+| GSD install — `npx -y get-shit-done-cc@latest --local --cursor` | no | yes (tracks `@latest`) |
+| `git init && git add -A && git commit` | **yes** | no (no `.git/` in copier's temp dirs) |
+| Cursor launch | **yes** | no (otherwise Cursor relaunches on every update) |
 
-`copier update` is therefore a pure template/docs refresh. It does not touch the portfolio or GSD. Users who edit `ade-repos.txt` to add or remove repos must manually clone/remove the corresponding directories.
+The sync loop never `git pull`s existing repos. `copier update` bringing in a new `ade-repos.txt` entry results in one `git clone`; already-cloned repos are left alone so that user WIP branches are never stomped. Users who want to pull everything run the one-liner documented in the scaffolded `README.md`.
 
-This strict copy-only guarding is a deliberate rollback from v0.7.0's "unguarded sync runs on update too" design. See D-007 and D-009 for the version history and the copier double-render behavior that made the v0.7.0 design costly in practice.
+Kitchen installers (`claudes-kitchen`, `open-kitchen`) are deliberately skipped; see D-013.
+
+The three versions of this policy (v0.7.0 unguarded-with-pull, v0.7.1 guarded-to-copy-only, v0.7.2 unguarded-clone-if-missing) and the copier double-render behavior that constrains them are documented in D-007 and D-009.
 
 ### 5. Portfolio as a copier input with file override
 
@@ -82,11 +89,11 @@ The seven GSD codebase intel files (`ARCHITECTURE.md`, `STACK.md`, `STRUCTURE.md
 ### 7. ade-repos.txt stays in the output
 
 Early iterations tried to hide this file (render → run → delete). Kept because:
-- Users edit `ade-repos.txt` to tweak the portfolio (and re-running `copier update --trust` re-renders the Cursor workspace file accordingly).
+- Users edit `ade-repos.txt` to tweak the portfolio (and re-running `copier update --trust` re-renders the Cursor workspace file and triggers `clone-if-missing` for any new entries).
 - The `ade-` prefix makes its purpose clear in the directory listing.
 - Copier manages it across template updates.
 
-The install flow that reads this file has gone through three iterations: a re-runnable companion `ade-install.sh` (v0.1.x–v0.6.x), inlined unguarded `_tasks` making `copier update` the sync entry point (v0.7.0), and finally inlined `_tasks` guarded to copy-only (v0.7.1+). See D-007 for the full rationale and D-009 for the copier double-render behavior that motivated the v0.7.0 → v0.7.1 revert.
+The install flow that reads this file has gone through four iterations: a re-runnable companion `ade-install.sh` (v0.1.x–v0.6.x), inlined unguarded `_tasks` with clone-or-pull making `copier update` the sync entry point (v0.7.0), inlined `_tasks` guarded to copy-only (v0.7.1), and finally unguarded inlined `_tasks` with a clone-if-missing sync loop (v0.7.2+). See D-007 for the full rationale and D-009 for the copier double-render behavior that shapes the guard decisions.
 
 ## Architecture
 
@@ -100,7 +107,7 @@ madi-parloa/ade-template (GitHub repo)
     ├── CLAUDE.md.jinja                 # Claude-specific guidance
     ├── README.md.jinja                 # human README
     ├── ade-repos.txt                   # default portfolio (13 Parloa repos + template itself)
-    ├── .gitignore                      # excludes .cursor/, cloned repos, volatile .planning/
+    ├── .gitignore                      # allowlist: ignore /*/ except .planning/; see D-014
     └── .planning/
         ├── PROJECT.md.jinja            # GSD project seed
         └── codebase/                   # 7 pre-seeded intel files
@@ -120,36 +127,38 @@ _min_copier_version: "9.0.0"
 _subdirectory: template           # template content lives under template/
 
 _tasks:
-  # 1. Override ade-repos.txt if user provided a custom file (runs on copy AND update; no-op when unset)
+  # 1. Override ade-repos.txt if user provided a custom file (no-op when unset)
   - >-
     {% if portfolio_file %}cp "{{ portfolio_file }}" ade-repos.txt{% endif %}
-  # 2. Portfolio sync: clone missing, pull existing (first scaffold only; kitchen installers skipped)
+  # 2. Portfolio sync: clone missing repos; existing repos are never touched.
+  #    Unguarded so new entries in ade-repos.txt propagate on copier update.
+  #    Kitchen installers are deliberately skipped; see D-013.
   - command:
       - bash
       - -c
       - |
-        # ...clone/pull loop reading ade-repos.txt...
-    when: "{{ _copier_operation == 'copy' }}"
-  # 3. GSD workspace-local install (first scaffold only)
+        # ...clone-if-missing loop reading ade-repos.txt...
+  # 3. GSD workspace-local install; unguarded so @latest tracks template evolution.
   - command:
       - bash
       - -c
       - |
         npx -y get-shit-done-cc@latest --local --cursor
+  # 4. Init git for copier update support (first scaffold only; no .git/ in copier temp dirs)
+  - command: "git init && git add -A && git commit -m 'ADE scaffold'"
     when: "{{ _copier_operation == 'copy' }}"
-  # 4. Init git for copier update support (first scaffold only)
-  - command: "git init && git add -A && git commit --no-gpg-sign -m 'ADE scaffold'"
-    when: "{{ _copier_operation == 'copy' }}"
-  # 5. Open Cursor (first scaffold only)
+  # 5. Open Cursor (first scaffold only; otherwise Cursor relaunches on every update)
   - command: "open -a Cursor '{{ ade_name }}.code-workspace'"
     when: "{{ _copier_operation == 'copy' }}"
 ```
 
-Every non-trivial task is guarded by `when: "{{ _copier_operation == 'copy' }}"`. This is strict because copier's update algorithm re-executes `_tasks` three times per update (old-baseline temp render, new-target temp render, and real project — the double-render path; see D-009). Running portfolio sync or `npx get-shit-done-cc` three times per update costs real wall time and bandwidth, so these tasks run only on first scaffold. `copier update` is therefore a pure template/docs refresh.
+Copier's update algorithm re-executes `_tasks` three times per update (old-baseline temp render, new-target temp render, and real project — the double-render path; see D-009). This is the central constraint. The sync loop is written as **clone-if-missing** so 3× execution is idempotent — one clone on the first iteration, two `[ -d "$dir" ]` skips on the other two. GSD install runs 3× and accepts the cost (3× npm registry check) as the price of tracking `@latest`. `git init` and Cursor launch are guarded to copy-only because running them on update would fail (no `.git/` in copier temp dirs) or be user-hostile (re-launching Cursor on every template bump).
 
 ## Known limitations (v1)
 
 - **Kitchens are cloned but not installed.** By design (see D-013). Users who want global kitchen installation must run `bash claudes-kitchen/setup-cooking-environment.sh` and `bash open-kitchen/setup-cargo-jfrog.sh` manually.
+- **Portfolio sync does not auto-pull existing repos.** `copier update` clones any repos newly added to `ade-repos.txt`, but never `git pull`s already-cloned repos (doing so on top of a user's WIP would be unsafe). Users who want to refresh everything run the one-liner documented in the scaffolded `README.md`. See D-007.
+- **ADEs scaffolded before v0.7.2 have stale gitlinks.** Prior `.gitignore` versions didn't catch nested portfolio repos, so `git add -A` on first scaffold tracked them as `160000`-mode gitlinks. After `copier update` to v0.7.2+ brings in the new `.gitignore`, run `git rm --cached -r <repo-name>` for each affected repo to drop the stale pointer. See D-014.
 - **macOS only.** Cursor path hardcoded to `/Applications/Cursor.app/Contents/MacOS/Cursor`.
 - **No per-ADE guardrail state.** Policy-gate and judge still use global `/tmp` paths. Two parallel ADEs with guardrails share state.
 - **copier update overwrites template-managed files.** If you edit `AGENTS.md` or `README.md` locally, `copier update` will merge changes (via git 3-way diff) but may produce conflicts.

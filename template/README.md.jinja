@@ -6,8 +6,8 @@
 
 This is an **ADE (Agent Dev Environment)** — a Cursor workspace scaffolded from a [copier template](https://github.com/madi-parloa/ade-template). It contains:
 
-- A portfolio of Parloa infrastructure repos listed in `ade-repos.txt` (cloned by copier `_tasks` during initial `copier copy` only).
-- GSD (Get Shit Done) installed workspace-locally for spec-driven development (on initial scaffold only).
+- A portfolio of Parloa infrastructure repos listed in `ade-repos.txt`, cloned by copier `_tasks`. Missing repos are cloned on both `copier copy` and `copier update`; already-cloned repos are never modified (safe for WIP).
+- GSD (Get Shit Done) installed workspace-locally for spec-driven development. Refreshed on every `copier update` (tracks `@latest`).
 - The `claudes-kitchen/` and `open-kitchen/` repos cloned as reference source. Their setup scripts are NOT auto-run — they mutate user/system state (see `claudes-kitchen/setup-cooking-environment.sh`). Run them manually if you want global installation.
 - Pre-seeded codebase intelligence in `.planning/codebase/` so GSD is immediately Parloa-aware.
 
@@ -19,38 +19,28 @@ This ADE was created with:
 uvx copier copy --trust git+https://github.com/madi-parloa/ade-template.git <this-directory>
 ```
 
-## Updating from the template
-
-Pull latest template/docs changes (new AGENTS.md guidance, updated `.planning/codebase/*` intel, refreshed workspace file):
+## Updating
 
 ```bash
 uvx copier update --trust
 ```
 
-`copier update` is a pure template/docs refresh. It does NOT re-sync the portfolio or reinstall GSD.
+Single entry point. Pulls template/docs changes (AGENTS.md guidance, `.planning/codebase/*` intel, refreshed workspace file) AND:
 
-## Re-syncing the portfolio (manual)
+- clones any repos newly added to `ade-repos.txt` (existing repos untouched — safe for WIP branches);
+- refreshes GSD via `npx -y get-shit-done-cc@latest --local --cursor`.
 
-If you added or removed lines in `ade-repos.txt` (or `copier update` brought in new portfolio entries from the template), clone/pull manually:
+## Pulling existing clones (optional, manual)
+
+`copier update` never `git pull`s repos you already have — doing so over your own WIP would be unsafe. When you do want to refresh all clones:
 
 ```bash
-while read -r url; do
-  dir="$(basename "$url" .git)"
-  [ -d "$dir" ] || git clone "$url" "$dir"
-done < <(grep -Ev '^\s*(#|$)' ade-repos.txt)
-
 for d in */; do [ -d "$d/.git" ] && git -C "$d" pull --ff-only; done
-```
-
-## Refreshing GSD
-
-```bash
-npx -y get-shit-done-cc@latest --local --cursor
 ```
 
 ## Producing a different ADE
 
-1. **Different repos** — re-run copier with `--data portfolio_file=/path/to/my-repos.txt`, or edit `ade-repos.txt` and sync manually (see above).
+1. **Different repos** — re-run copier with `--data portfolio_file=/path/to/my-repos.txt`, or edit `ade-repos.txt` and run `uvx copier update --trust` to clone any newly listed entries.
 2. **Fork the template** — `gh repo fork madi-parloa/ade-template --remote` and scaffold from your fork.
 
 ## Files
@@ -62,4 +52,4 @@ npx -y get-shit-done-cc@latest --local --cursor
 | `ade-repos.txt` | Git URLs of repos to clone |
 | `.planning/PROJECT.md` | GSD project definition |
 | `.planning/codebase/*.md` | Pre-seeded codebase intelligence |
-| `.cursor/` | Workspace-local Cursor config (populated by copier `_tasks` / GSD on first scaffold) |
+| `.cursor/` | Workspace-local Cursor config (populated by copier `_tasks` / GSD, refreshed on every `copier update`) |
