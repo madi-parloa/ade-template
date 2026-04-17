@@ -21,8 +21,8 @@ This is a Copier template repo, not a runtime project. It scaffolds Agent Dev En
 - Read `docs/DECISIONS.md` for specific decision context (e.g., why tasks are guarded by `_copier_operation`).
 - **When to tag:** Create a new git tag (e.g., `v0.5.1`) when you change anything inside `template/` or `copier.yml` — these affect what copier scaffolds. Copier resolves the latest tag to determine the template version; without a new tag, `copier update` won't see the change.
 - **When NOT to tag:** Changes to `README.md`, `AGENTS.md`, or `docs/` at the repo root do NOT need a tag — they are not part of the copier template output.
-- Test template changes locally before pushing: `uvx copier copy --trust --defaults --data ade_name=test --data portfolio_file=/dev/null /tmp/ade-template /tmp/test-ade`
-- Test `copier update` after any `_tasks` change — tasks run in both copy and update contexts, and update runs in copier's internal temp dirs too.
+- **Before tagging, run `bash test.sh`.** It exercises both `copier copy` and `copier update` against the working tree with stubbed `open` / `npx` (so Cursor doesn't launch and GSD doesn't install). If it fails, do NOT tag — a broken tag makes `copier update` unrecoverable on any ADE that lands on it as a baseline (see `docs/DECISIONS.md` D-012).
+- Why this matters: Jinja include paths, `_tasks` semantics, and ordering between render and tasks are all easy to get wrong in ways that pass local mental dry-runs but fail at real `copier copy` / `update` time. The test catches this class of bug.
 
 ## Keeping an ADE up to date
 
