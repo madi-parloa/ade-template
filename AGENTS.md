@@ -24,6 +24,13 @@ This is a Copier template repo, not a runtime project. It scaffolds Agent Dev En
 - Test template changes locally before pushing: `uvx copier copy --trust --defaults --data ade_name=test --data portfolio_file=/dev/null /tmp/ade-template /tmp/test-ade`
 - Test `copier update` after any `_tasks` change — tasks run in both copy and update contexts, and update runs in copier's internal temp dirs too.
 
+## Keeping an ADE up to date
+
+Two steps, in order:
+
+1. `uvx copier update --trust` — pulls latest template changes (new repos in portfolio, updated context files, etc.) via smart 3-way merge.
+2. `bash ade-install.sh` — clones any new repos, pulls latest on existing ones, re-installs GSD + kitchens (idempotent).
+
 ## Editing template files
 
 - Files under `template/` with `.jinja` suffix are Jinja2 templates. Variables like `{{ ade_name }}` and `{{ description }}` come from `copier.yml` questions. The suffix is stripped in output.

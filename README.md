@@ -19,22 +19,33 @@ Copier prompts for a name and description, renders the template, clones all repo
 | File | Purpose |
 |------|---------|
 | `AGENTS.md` | Agent-level workspace context |
-| `CLAUDE.md` | Claude-specific instructions |
 | `README.md` | Human orientation |
-| `ade-repos.txt` | Git URLs of repos to clone (editable, re-run `ade-install.sh` after changes) |
-| `ade-install.sh` | Clones repos, installs GSD + kitchens |
+| `ade-repos.txt` | Git URLs of repos to clone |
+| `ade-install.sh` | Clones/pulls repos, installs GSD + kitchens |
 | `.planning/PROJECT.md` | GSD project definition |
 | `.planning/codebase/*.md` | Pre-seeded codebase intelligence (7 files) |
 | `.cursor/` | Workspace-local Cursor config (populated by install) |
 
-## Updating an existing ADE
+## Keeping an ADE up to date
+
+Two steps:
+
+**1. Pull latest template changes** (new repos in portfolio, updated AGENTS.md, etc.):
 
 ```bash
 cd ~/path/to/my-ade
 uvx copier update --trust
 ```
 
-Re-renders template files (preserving your answers) and re-runs `ade-install.sh`.
+This merges template changes into your ADE while preserving your local edits.
+
+**2. Sync all repos** (clone any new repos, pull latest on existing ones):
+
+```bash
+bash ade-install.sh
+```
+
+This also re-installs GSD and re-runs kitchen setups (idempotent).
 
 ## Customizing
 
