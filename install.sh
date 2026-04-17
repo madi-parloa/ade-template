@@ -40,4 +40,5 @@ if [ -d open-kitchen ]; then
   }
 fi
 
-echo "==> ADE setup complete. Open this directory in Cursor: cursor ."
+echo "==> ADE setup complete. Opening in Cursor..."
+cursor .
