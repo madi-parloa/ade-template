@@ -35,7 +35,9 @@ import os
 import sys
 
 workspace_file = sys.argv[1]
-folders = []
+
+portfolio_folders = []
+portfolio_paths = set()
 with open("ade-repos.txt") as f:
     for line in f:
         line = line.strip()
@@ -45,26 +47,47 @@ with open("ade-repos.txt") as f:
         if name.endswith(".git"):
             name = name[:-4]
         if os.path.isdir(name):
-            folders.append({"name": name, "path": name})
+            portfolio_folders.append({"name": name, "path": name})
+            portfolio_paths.add(name)
 
-workspace = {
-    "folders": folders,
-    "settings": {
-        "git.autoRepositoryDetection": "subFolders",
-        "git.repositoryScanMaxDepth": 2,
-        "git.repositoryScanIgnoredFolders": [
-            "node_modules", ".planning", ".terraform",
-            "dist", "build", ".venv", "venv", "__pycache__"
-        ],
-        "git.openRepositoryInParentFolders": "never"
-    }
+managed_settings = {
+    "git.autoRepositoryDetection": False,
+    "git.openRepositoryInParentFolders": "never",
 }
 
-with open(workspace_file, "w") as f:
+existing = {}
+if os.path.exists(workspace_file):
+    try:
+        with open(workspace_file) as f:
+            existing = json.load(f)
+        if not isinstance(existing, dict):
+            existing = {}
+    except (json.JSONDecodeError, OSError):
+        existing = {}
+
+preserved_folders = [
+    f for f in existing.get("folders", [])
+    if isinstance(f, dict) and f.get("path") not in portfolio_paths
+]
+
+workspace = dict(existing)
+workspace["folders"] = portfolio_folders + preserved_folders
+
+merged_settings = dict(existing.get("settings") or {})
+merged_settings.update(managed_settings)
+workspace["settings"] = merged_settings
+
+tmp = workspace_file + ".tmp"
+with open(tmp, "w") as f:
     json.dump(workspace, f, indent=2)
     f.write("\n")
+os.replace(tmp, workspace_file)
 
-print(f"    wrote {workspace_file} with {len(folders)} folders")
+extra = len(preserved_folders)
+msg = f"    wrote {workspace_file} with {len(portfolio_folders)} portfolio folders"
+if extra:
+    msg += f" (+ {extra} preserved non-portfolio root{'s' if extra != 1 else ''})"
+print(msg)
 PY
 
 echo "==> Installing GSD workspace-locally..."
