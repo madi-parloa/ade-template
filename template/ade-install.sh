@@ -27,6 +27,46 @@ if [ "$CLONE_FAILURES" -gt 0 ]; then
   echo "    $CLONE_FAILURES repo(s) failed to clone — continuing with the rest"
 fi
 
+echo "==> Generating Cursor workspace file..."
+WORKSPACE_FILE="$(basename "$(pwd)").code-workspace"
+python3 - "$WORKSPACE_FILE" <<'PY'
+import json
+import os
+import sys
+
+workspace_file = sys.argv[1]
+folders = []
+with open("ade-repos.txt") as f:
+    for line in f:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        name = os.path.basename(line)
+        if name.endswith(".git"):
+            name = name[:-4]
+        if os.path.isdir(name):
+            folders.append({"name": name, "path": name})
+
+workspace = {
+    "folders": folders,
+    "settings": {
+        "git.autoRepositoryDetection": "subFolders",
+        "git.repositoryScanMaxDepth": 2,
+        "git.repositoryScanIgnoredFolders": [
+            "node_modules", ".planning", ".terraform",
+            "dist", "build", ".venv", "venv", "__pycache__"
+        ],
+        "git.openRepositoryInParentFolders": "never"
+    }
+}
+
+with open(workspace_file, "w") as f:
+    json.dump(workspace, f, indent=2)
+    f.write("\n")
+
+print(f"    wrote {workspace_file} with {len(folders)} folders")
+PY
+
 echo "==> Installing GSD workspace-locally..."
 npx -y get-shit-done-cc@latest --local --cursor
 

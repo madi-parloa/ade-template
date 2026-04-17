@@ -8,7 +8,7 @@ _tasks:
     when: "{{ _copier_operation == 'copy' }}"
   - command: "git init && git add -A && git commit --no-gpg-sign -m 'ADE scaffold'"
     when: "{{ _copier_operation == 'copy' }}"
-  - command: "/Applications/Cursor.app/Contents/MacOS/Cursor \"$(pwd)\" &>/dev/null &"
+  - command: "/Applications/Cursor.app/Contents/MacOS/Cursor \"$(pwd)/$(basename \"$(pwd)\").code-workspace\" &>/dev/null &"
     when: "{{ _copier_operation == 'copy' }}"
 
 ade_name:
