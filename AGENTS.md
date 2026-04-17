@@ -19,8 +19,8 @@ This is a Copier template repo, not a runtime project. It scaffolds Agent Dev En
 
 - Read `docs/DESIGN.md` before making changes — it explains why things are the way they are.
 - Read `docs/DECISIONS.md` for specific decision context (e.g., why tasks are guarded by `_copier_operation`).
-- Template changes that affect scaffolded output should be tagged with a new PEP 440 version (e.g., `v0.5.1`). Copier uses tags for version tracking.
-- Docs and README changes at the repo root do NOT need a new tag — they don't affect copier output.
+- **When to tag:** Create a new git tag (e.g., `v0.5.1`) when you change anything inside `template/` or `copier.yml` — these affect what copier scaffolds. Copier resolves the latest tag to determine the template version; without a new tag, `copier update` won't see the change.
+- **When NOT to tag:** Changes to `README.md`, `AGENTS.md`, `CLAUDE.md`, or `docs/` at the repo root do NOT need a tag — they are not part of the copier template output.
 - Test template changes locally before pushing: `uvx copier copy --trust --defaults --data ade_name=test --data portfolio_file=/dev/null /tmp/ade-template /tmp/test-ade`
 - Test `copier update` after any `_tasks` change — tasks run in both copy and update contexts, and update runs in copier's internal temp dirs too.
 
