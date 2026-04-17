@@ -23,4 +23,5 @@ Do not treat this repo as an application or service. It has no source code, no t
 
 - `docs/DESIGN.md` and `docs/DECISIONS.md` are repo-level documentation, not part of the template output.
 - Update `DECISIONS.md` when making a design choice that future contributors should understand.
-- No tag needed for doc-only changes.
+- No tag needed for doc-only changes (anything outside `template/` and `copier.yml`).
+- Tag required for any change to `template/` or `copier.yml` — without it, `copier update` won't pick up the change.
