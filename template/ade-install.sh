@@ -8,11 +8,12 @@ if [ ! -f ade-repos.txt ]; then
   exit 1
 fi
 
-echo "==> Cloning portfolio repos..."
+echo "==> Syncing portfolio repos..."
 while read -r url; do
   dir="$(basename "$url" .git)"
   if [ -d "$dir" ]; then
-    echo "    $dir/ already exists, skipping"
+    echo "    $dir/ exists, pulling latest..."
+    git -C "$dir" pull --ff-only 2>/dev/null || echo "    WARNING: pull failed for $dir (may have local changes)"
   else
     echo "    cloning $dir..."
     if ! git clone "$url" "$dir"; then
