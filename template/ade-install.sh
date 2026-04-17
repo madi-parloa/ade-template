@@ -33,9 +33,9 @@ if [ -d claudes-kitchen ]; then
   }
 fi
 
-if [ -d open-kitchen ]; then
+if [ -f open-kitchen/setup-cargo-jfrog.sh ]; then
   echo "    setting up open-kitchen..."
-  bash open-kitchen/scripts/install.sh </dev/null || {
+  bash open-kitchen/setup-cargo-jfrog.sh </dev/null || {
     echo "    WARNING: open-kitchen setup exited non-zero (may need interactive setup later)"
   }
 fi
