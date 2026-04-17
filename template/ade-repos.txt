@@ -14,7 +14,7 @@ git@github.com:parloa/crossplane-xrd.git
 # Catalog
 git@github.com:parloa/engineering-catalog.git
 
-# Kitchens (provide skills and plugins)
+# Kitchens (source reference only; setup scripts are NOT auto-run — see docs/DECISIONS.md D-013)
 git@github.com:parloa/claudes-kitchen.git
 git@github.com:parloa/open-kitchen.git
 

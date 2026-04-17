@@ -2,7 +2,7 @@
 
 ## What this is
 
-A [Copier](https://copier.readthedocs.io/) template that scaffolds an **ADE (Agent Dev Environment)** — a Cursor workspace containing a portfolio of cloned repos, workspace-local GSD, kitchen skills, and pre-seeded codebase intelligence.
+A [Copier](https://copier.readthedocs.io/) template that scaffolds an **ADE (Agent Dev Environment)** — a Cursor workspace containing a portfolio of cloned repos, workspace-local GSD, and pre-seeded codebase intelligence.
 
 One command creates a fully functional agentic workspace:
 
@@ -33,7 +33,9 @@ Early iterations designed a custom `ade` CLI with `ade new`, `ade launch`, `ade 
 
 Install scripts must write to `<ade>/.cursor/`, not `~/.cursor/`. This gives per-ADE isolation using Cursor's native workspace-level config layer — different ADEs present different skill/rule/hook/MCP sets without needing shadow-HOME machinery.
 
-GSD supports this via `npx -y get-shit-done-cc@latest --local --cursor`. Kitchen setup scripts are expected to respect the working directory.
+GSD supports this via `npx -y get-shit-done-cc@latest --local --cursor`.
+
+Kitchen setup scripts (`claudes-kitchen/setup-cooking-environment.sh`, `open-kitchen/setup-cargo-jfrog.sh`) do NOT respect the working directory — they write to `$HOME/.cargo`, `$HOME/.claude`, `$HOME/CLAUDE.md`, `$HOME/.git-templates`, global git config, and (on Linux) apt-installed system packages. Running them during ADE scaffolding would violate workspace-local isolation. The kitchen repos are therefore cloned for reference but their installers are not auto-run (see D-013).
 
 Earlier iterations explored:
 - **Shadow HOME per ADE** (overriding `$HOME` for each Cursor process). Rejected for v1 as overkill — workspace-level `.cursor/` gives isolation for free.
@@ -48,10 +50,17 @@ The repo root holds `copier.yml` and `README.md` (copier config + landing page).
 
 `copier update` requires the destination to be a git repo (hard requirement — the source code raises `UserMessageError("Updating is only supported in git-tracked subprojects.")`). This is a local `.git/` only — no remote, no push.
 
-Tasks are guarded by `_copier_operation == 'copy'` so they only run on first scaffold, not on updates:
-- `bash ade-install.sh` — clones repos, installs GSD + kitchens
-- `git init && git add -A && git commit` — creates the local git repo
-- Cursor launch — opens the ADE
+`_tasks` split into two groups:
+
+**Run on both copy and update** (idempotent, form the sync pipeline):
+- Portfolio clone/pull loop — reads `ade-repos.txt`, clones missing, `git pull --ff-only` existing. Kitchen installers (`claudes-kitchen`, `open-kitchen`) are deliberately skipped; see D-013.
+- GSD workspace-local install — `npx -y get-shit-done-cc@latest --local --cursor`.
+
+**Guarded by `when: "{{ _copier_operation == 'copy' }}"`** (first scaffold only):
+- `git init && git add -A && git commit` — creates the local git repo.
+- Cursor launch — opens the ADE.
+
+This means `copier update` is the single entry point for both "pull latest template changes" and "re-sync portfolio / GSD" — no separate re-sync script.
 
 ### 5. Portfolio as a copier input with file override
 
@@ -71,12 +80,14 @@ The seven GSD codebase intel files (`ARCHITECTURE.md`, `STACK.md`, `STRUCTURE.md
 - No need to run `/gsd-map-codebase` (which takes minutes and spawns multiple subagents) before starting work.
 - Static copies — regenerate with `/gsd-map-codebase` if the portfolio changes.
 
-### 7. ade-install.sh and ade-repos.txt stay in the output
+### 7. ade-repos.txt stays in the output
 
-Early iterations tried to hide these files (render → run → delete). Kept because:
-- Users need to re-run `bash ade-install.sh` after manual edits to `ade-repos.txt`.
-- The `ade-` prefix makes their purpose clear in the directory listing.
-- Copier manages them across template updates.
+Early iterations tried to hide this file (render → run → delete). Kept because:
+- Users edit `ade-repos.txt` to add/remove repos and then re-run `copier update --trust` to sync.
+- The `ade-` prefix makes its purpose clear in the directory listing.
+- Copier manages it across template updates.
+
+An earlier design kept a companion `ade-install.sh` script for the same reason (manual re-sync), but the clone loop and GSD install were later inlined into copier `_tasks` so `copier update` is the sole sync entry point. See D-007 for the full history.
 
 ## Architecture
 
@@ -90,7 +101,6 @@ madi-parloa/ade-template (GitHub repo)
     ├── CLAUDE.md.jinja                 # Claude-specific guidance
     ├── README.md.jinja                 # human README
     ├── ade-repos.txt                   # default portfolio (13 Parloa repos + template itself)
-    ├── ade-install.sh                  # clone + GSD + kitchens
     ├── .gitignore                      # excludes .cursor/, cloned repos, volatile .planning/
     └── .planning/
         ├── PROJECT.md.jinja            # GSD project seed
@@ -111,26 +121,34 @@ _min_copier_version: "9.0.0"
 _subdirectory: template           # template content lives under template/
 
 _tasks:
-  # 1. Override ade-repos.txt if user provided a custom file
+  # 1. Override ade-repos.txt if user provided a custom file (runs on copy AND update)
   - >-
     {% if portfolio_file %}cp "{{ portfolio_file }}" ade-repos.txt{% endif %}
-  # 2. Clone repos + install GSD + kitchens (first scaffold only)
-  - command: "bash ade-install.sh"
-    when: "{{ _copier_operation == 'copy' }}"
-  # 3. Init git for copier update support (first scaffold only)
+  # 2. Portfolio sync: clone missing, pull existing (runs on copy AND update; kitchen installers skipped)
+  - command:
+      - bash
+      - -c
+      - |
+        # ...clone/pull loop reading ade-repos.txt...
+  # 3. GSD workspace-local install (runs on copy AND update; idempotent)
+  - command:
+      - bash
+      - -c
+      - |
+        npx -y get-shit-done-cc@latest --local --cursor
+  # 4. Init git for copier update support (first scaffold only)
   - command: "git init && git add -A && git commit --no-gpg-sign -m 'ADE scaffold'"
     when: "{{ _copier_operation == 'copy' }}"
-  # 4. Open Cursor (first scaffold only)
-  - command: "/Applications/Cursor.app/Contents/MacOS/Cursor \"$(pwd)\" &>/dev/null &"
+  # 5. Open Cursor (first scaffold only)
+  - command: "open -a Cursor '{{ ade_name }}.code-workspace'"
     when: "{{ _copier_operation == 'copy' }}"
 ```
 
-The `when: "{{ _copier_operation == 'copy' }}"` guard is critical: without it, `copier update` would re-clone all repos, re-install GSD, and re-open Cursor on every template update.
+The `when: "{{ _copier_operation == 'copy' }}"` guard on `git init` and the Cursor launch is critical — without it, `git add -A` would fail inside copier's internal temp directories during update (no `.git/` there), and Cursor would re-open on every template update. The sync + GSD tasks deliberately run on both operations so `copier update` is the single re-sync entry point; per D-009, this trades a small amount of redundant work in update's internal temp renders for removing the need for a separate install script.
 
 ## Known limitations (v1)
 
-- **Kitchen setup scripts may prompt interactively.** `claudes-kitchen/setup-cooking-environment.sh` asks for a JFrog token. In non-interactive mode, `/dev/null` is piped and the failure is caught. Run the kitchen setup manually afterward.
-- **open-kitchen install path is fragile.** The script has `setup-cargo-jfrog.sh` but the exact path may change.
+- **Kitchens are cloned but not installed.** By design (see D-013). Users who want global kitchen installation must run `bash claudes-kitchen/setup-cooking-environment.sh` and `bash open-kitchen/setup-cargo-jfrog.sh` manually.
 - **macOS only.** Cursor path hardcoded to `/Applications/Cursor.app/Contents/MacOS/Cursor`.
 - **No per-ADE guardrail state.** Policy-gate and judge still use global `/tmp` paths. Two parallel ADEs with guardrails share state.
 - **copier update overwrites template-managed files.** If you edit `AGENTS.md` or `README.md` locally, `copier update` will merge changes (via git 3-way diff) but may produce conflicts.

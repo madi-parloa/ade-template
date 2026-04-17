@@ -7,11 +7,11 @@ This is a Copier template repo, not a runtime project. It scaffolds Agent Dev En
 - `copier.yml` — Copier configuration: questions, `_tasks`, `_subdirectory` setting
 - `README.md` — GitHub landing page
 - `docs/DESIGN.md` — Full design document with motivation and architecture
-- `docs/DECISIONS.md` — Decision log (D-001 through D-011) with context for every choice
+- `docs/DECISIONS.md` — Decision log (D-001 through D-013) with context for every choice
 - `template/` — Everything copier renders into an ADE:
   - `.jinja` files are rendered with variable substitution (suffix stripped in output)
   - Non-`.jinja` files are copied verbatim
-  - `ade-install.sh` clones the portfolio and installs GSD + kitchens
+  - Portfolio clone/pull and GSD workspace-local install are driven by copier `_tasks` in `copier.yml` (not a separate shell script). Kitchen setup scripts (`claudes-kitchen`, `open-kitchen`) are deliberately NOT run — see `docs/DECISIONS.md` D-013.
   - `ade-repos.txt` lists the default repo portfolio
   - `.planning/codebase/*.md` are pre-seeded GSD intel files
 
@@ -26,10 +26,7 @@ This is a Copier template repo, not a runtime project. It scaffolds Agent Dev En
 
 ## Keeping an ADE up to date
 
-Two steps, in order:
-
-1. `uvx copier update --trust` — pulls latest template changes (new repos in portfolio, updated context files, etc.) via smart 3-way merge.
-2. `bash ade-install.sh` — clones any new repos, pulls latest on existing ones, re-installs GSD + kitchens (idempotent).
+One step: `uvx copier update --trust` — pulls latest template changes (new repos in portfolio, updated context files, etc.) via smart 3-way merge AND re-runs the portfolio sync + GSD install `_tasks` (idempotent). Kitchen setup scripts are not run, per D-013.
 
 ## Editing template files
 

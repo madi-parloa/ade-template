@@ -4,8 +4,40 @@ _subdirectory: template
 _tasks:
   - >-
     {% if portfolio_file %}cp "{{ portfolio_file }}" ade-repos.txt{% endif %}
-  - command: "bash ade-install.sh"
-    when: "{{ _copier_operation == 'copy' }}"
+  - command:
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        if [ ! -f ade-repos.txt ]; then
+          echo "==> ERROR: ade-repos.txt not found. Nothing to clone."
+          exit 1
+        fi
+        echo "==> Syncing portfolio repos..."
+        CLONE_FAILURES=0
+        while read -r url; do
+          dir="$(basename "$url" .git)"
+          if [ -d "$dir" ]; then
+            echo "    $dir/ exists, pulling latest..."
+            git -C "$dir" pull --ff-only 2>/dev/null || echo "    WARNING: pull failed for $dir (may have local changes)"
+          else
+            echo "    cloning $dir..."
+            if ! git clone "$url" "$dir"; then
+              echo "    WARNING: failed to clone $url (check access rights)"
+              CLONE_FAILURES=$((CLONE_FAILURES + 1))
+            fi
+          fi
+        done < <(grep -Ev '^\s*(#|$)' ade-repos.txt)
+        if [ "$CLONE_FAILURES" -gt 0 ]; then
+          echo "    $CLONE_FAILURES repo(s) failed to clone — continuing with the rest"
+        fi
+  - command:
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        echo "==> Installing GSD workspace-locally..."
+        npx -y get-shit-done-cc@latest --local --cursor
   - command: "git init && git add -A && git commit --no-gpg-sign -m 'ADE scaffold'"
     when: "{{ _copier_operation == 'copy' }}"
   - command: "open -a Cursor '{{ ade_name }}.code-workspace'"

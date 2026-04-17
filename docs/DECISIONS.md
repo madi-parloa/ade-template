@@ -59,11 +59,13 @@ The git repo is local only — no remote.
 
 Seven files: ARCHITECTURE, CONCERNS, CONVENTIONS, INTEGRATIONS, STACK, STRUCTURE, TESTING. All produced by `/gsd-map-codebase` on 2026-04-07.
 
-## D-007: ade-repos.txt and ade-install.sh stay in output
+## D-007: ade-repos.txt stays in output; ade-install.sh removed in favor of _tasks
 
-**Decision:** Keep these files in the ADE (not hidden or deleted after use).
+**Decision:** Keep `ade-repos.txt` in the ADE (not hidden or deleted after use). The separate `ade-install.sh` script was removed; its clone loop and GSD install now live directly in copier `_tasks`.
 
-**Context:** Early iteration tried render → run → delete. User said: "might as well keep them, just rename to something understandable." The `ade-` prefix was chosen to make clear they belong to the ADE template system, not to any repo in the portfolio.
+**Context:** Early iteration tried render → run → delete. User said: "might as well keep them, just rename to something understandable." The `ade-` prefix was chosen to make clear `ade-repos.txt` belongs to the ADE template system, not to any repo in the portfolio.
+
+Initially `ade-install.sh` shipped alongside as a re-runnable sync tool: users could edit `ade-repos.txt` and re-run the script to clone new repos / pull existing ones without touching copier. That split was later consolidated — the clone loop and `npx get-shit-done-cc` call moved into copier `_tasks` (unguarded by `_copier_operation`), making `uvx copier update --trust` the sole sync entry point. Trade-off: `copier update` redundantly runs the sync in its internal temp render directories, but it removes a file from the output and eliminates the "which of these two commands do I need?" friction. See D-009 for the guard semantics.
 
 ## D-008: Answers file for copier update
 
@@ -71,13 +73,21 @@ Seven files: ARCHITECTURE, CONCERNS, CONVENTIONS, INTEGRATIONS, STACK, STRUCTURE
 
 **Context:** Copier does NOT auto-generate `.copier-answers.yml` unless the template explicitly includes a Jinja file with that name. Discovered when the answers file was missing from scaffolded ADEs. Without it, `copier update` can't determine which template version was used or what answers were given.
 
-## D-009: Tasks guarded by _copier_operation
+## D-009: Selective _copier_operation guards
 
-**Decision:** `ade-install.sh`, `git init`, and Cursor launch only run during `copier copy`, not during `copier update`.
+**Decision:** `git init` and Cursor launch are guarded by `when: "{{ _copier_operation == 'copy' }}"`. The portfolio sync and GSD install tasks are deliberately unguarded so they run on both `copier copy` and `copier update`.
 
-**Context:** `_tasks` run during both copy and update. Without the guard, every `copier update` would re-clone 14 repos, re-install GSD, and re-open Cursor — taking minutes for what should be a fast template-file update.
+**Context:** `_tasks` run during both copy and update. Earlier versions guarded every task with `_copier_operation == 'copy'` and shipped a separate `ade-install.sh` for re-sync. That was consolidated (see D-007): sync + GSD now run on update too, making `copier update` a one-command refresh.
 
-Discovered during end-to-end testing: unguarded `git add -A` failed in copier's internal temp directory during update with `fatal: not a git repository`.
+Still guarded (must only run on first scaffold):
+- `git init && git add -A && git commit` — unguarded, this fails in copier's internal temp directory during update with `fatal: not a git repository` (discovered during end-to-end testing). On copy, it establishes the `.git/` that copier update requires (D-004).
+- Cursor launch — unguarded, Cursor would re-open on every template update.
+
+Deliberately unguarded (safe + desired to run on update):
+- Portfolio sync (clone/pull loop) — idempotent. Runs redundantly inside copier's internal temp render directories during update; this is wasted work but harmless (clones land in a temp dir that copier discards).
+- GSD install (`npx -y get-shit-done-cc@latest --local --cursor`) — idempotent. Same caveat about temp-dir redundancy.
+
+Trade-off: `copier update` does more work than strictly necessary (sync runs in temp renders plus at the real target), but removes the need for a separate re-sync script. Accepted.
 
 ## D-010: Include ade-template in its own portfolio
 
@@ -101,3 +111,36 @@ Discovered during end-to-end testing: unguarded `git add -A` failed in copier's 
 2. Delete the broken tag upstream so copier falls back to the previous tag.
 
 Neither is acceptable in a shared template. Therefore: pre-tag tests are mandatory, and `v0.6.0` was force-deleted after it shipped a broken `{% include %}` path that only manifested at `copier update` time (the broken-baseline double-render path).
+
+## D-013: Kitchen installers are not auto-run
+
+**Decision:** The copier `_tasks` sync loop clones `claudes-kitchen/` and `open-kitchen/` but does NOT execute their setup scripts. Users who want kitchen functionality run the installers manually.
+
+**Context:** D-002 mandates workspace-local installation — nothing scaffolded by the ADE should mutate `~/` or system paths. Auditing the kitchen setup scripts showed they violate this contract heavily:
+
+`claudes-kitchen/setup-cooking-environment.sh` writes to:
+- `$HOME/CLAUDE.md` (overwritten, prior version moved to `.backup`)
+- `$HOME/.claude/settings.json` (merges a company-wide permissions allowlist)
+- `$HOME/.claude/.company-permissions.json` (canonical baseline for future merges)
+- `$HOME/.cargo/credentials.toml` (JFrog bearer token; prompts interactively)
+- `$HOME/.git-templates/hooks/` + `git config --global init.templateDir` (every future `git init` inherits these hooks)
+- `$HOME/.gnupg/gpg-agent.conf` (macOS pinentry config)
+- `$HOME/.zshrc` / `$HOME/.bashrc` (appends `source claudes-kitchen/.env`)
+- `git config --global commit.gpgsign true`
+- Installs the Claude Code CLI and adds a plugin marketplace to the user's Claude install
+
+On Linux it additionally runs `sudo apt-get install` for gnupg, jq, 1password-cli, writes APT keyrings under `/usr/share/keyrings/`, `/etc/apt/sources.list.d/`, and `/etc/debsig/policies/`, and drops a gitleaks binary into `/usr/local/bin/`.
+
+`open-kitchen/setup-cargo-jfrog.sh` writes `$HOME/.cargo/credentials.toml`.
+
+None of this is workspace-local. Running these installers as part of `copier copy` would:
+1. Silently change the user's global environment every time an ADE is scaffolded.
+2. Overwrite `$HOME/CLAUDE.md` on a machine that may host multiple ADEs, defeating per-ADE isolation.
+3. Fail in confusing ways when non-interactive (an earlier iteration piped `</dev/null` into the kitchen installers, which caused the JFrog token prompt to be skipped but left the user unsure whether setup succeeded).
+
+**Alternatives considered:**
+- Run kitchens as before, document the global side-effects in the README — rejected: scaffolding should be side-effect-free outside the ADE directory.
+- Fork the kitchens and strip the global writes — rejected for v1: large maintenance surface; kitchens are an evolving external codebase.
+- Remove the kitchen repos from `ade-repos.txt` entirely — rejected: their source is valuable as reference material for composing skills, and cloning a git repo is itself side-effect-free.
+
+**Trade-off:** Users who expected kitchens to be live after scaffolding must now run the installers themselves. The `README.md` and `docs/DESIGN.md` flag this clearly.
