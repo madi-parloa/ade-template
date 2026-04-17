@@ -22,17 +22,22 @@ if [ "$CLONE_FAILURES" -gt 0 ]; then
 fi
 
 echo "==> Installing GSD workspace-locally..."
-npx -y get-shit-done-cc@latest
+npx -y get-shit-done-cc@latest --local --cursor
 
 echo "==> Running kitchen setup scripts..."
+echo "    (kitchen scripts that prompt for input may need to be run manually afterwards)"
 if [ -d claudes-kitchen ]; then
   echo "    setting up claudes-kitchen..."
-  bash claudes-kitchen/setup-cooking-environment.sh
+  bash claudes-kitchen/setup-cooking-environment.sh </dev/null || {
+    echo "    WARNING: claudes-kitchen setup exited non-zero (may need interactive setup later)"
+  }
 fi
 
 if [ -d open-kitchen ]; then
   echo "    setting up open-kitchen..."
-  bash open-kitchen/scripts/install.sh
+  bash open-kitchen/scripts/install.sh </dev/null || {
+    echo "    WARNING: open-kitchen setup exited non-zero (may need interactive setup later)"
+  }
 fi
 
 echo "==> ADE setup complete. Open this directory in Cursor: cursor ."
