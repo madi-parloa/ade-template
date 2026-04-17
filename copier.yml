@@ -5,7 +5,7 @@ _tasks:
   - >-
     {% if portfolio_file %}cp {{ portfolio_file }} ade-repos.txt{% endif %}
   - "bash ade-install.sh"
-  - "cursor ."
+  - "/Applications/Cursor.app/Contents/MacOS/Cursor . &>/dev/null &"
 
 ade_name:
   type: str
