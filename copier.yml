@@ -1,5 +1,9 @@
 _min_copier_version: "9.0.0"
 
+_exclude:
+  - README.md
+  - copier.yml
+
 _tasks:
   - "bash install.sh"
 
