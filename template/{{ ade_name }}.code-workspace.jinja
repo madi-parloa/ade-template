@@ -1,4 +1,4 @@
-{%- set portfolio_text -%}{% include 'ade-repos.txt' %}{%- endset -%}
+{%- set portfolio_text -%}{% include 'template/ade-repos.txt' %}{%- endset -%}
 {%- set repo_names = [] -%}
 {%- for raw in portfolio_text.splitlines() -%}
   {%- set line = raw.strip() -%}
