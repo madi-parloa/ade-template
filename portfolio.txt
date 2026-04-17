@@ -19,4 +19,4 @@ git@github.com:parloa/claudes-kitchen.git
 git@github.com:parloa/open-kitchen.git
 
 # Agent guardrails (policy-gate, hooks, custom skills/rules)
-git@github.com:parloa/cursor-self-hosted-agent.git
+git@github.com:madi-parloa/cursor-self-hosted-agent.git
