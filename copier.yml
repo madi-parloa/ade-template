@@ -6,10 +6,8 @@ _tasks:
     {% if portfolio_file %}cp "{{ portfolio_file }}" ade-repos.txt{% endif %}
   - command: "bash ade-install.sh"
     when: "{{ _copier_operation == 'copy' }}"
-  - command: "git init"
+  - command: "git init && git add -A && git commit --no-gpg-sign -m 'ADE scaffold'"
     when: "{{ _copier_operation == 'copy' }}"
-  - "git add -A"
-  - "git commit --no-gpg-sign --allow-empty -m 'ADE scaffold from template {{ _copier_conf.version }}'"
   - command: "/Applications/Cursor.app/Contents/MacOS/Cursor \"$(pwd)\" &>/dev/null &"
     when: "{{ _copier_operation == 'copy' }}"
 
