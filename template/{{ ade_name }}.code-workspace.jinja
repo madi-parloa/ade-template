@@ -1,0 +1,24 @@
+{%- set portfolio_text -%}{% include 'ade-repos.txt' %}{%- endset -%}
+{%- set repo_names = [] -%}
+{%- for raw in portfolio_text.splitlines() -%}
+  {%- set line = raw.strip() -%}
+  {%- if line and not line.startswith('#') -%}
+    {%- set base = line.split('/')[-1] -%}
+    {%- if base.endswith('.git') -%}
+      {%- set _ = repo_names.append(base[:-4]) -%}
+    {%- else -%}
+      {%- set _ = repo_names.append(base) -%}
+    {%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+{
+  "folders": [
+{%- for name in repo_names %}
+    {"name": {{ name | tojson }}, "path": {{ name | tojson }}}{{ "," if not loop.last else "" }}
+{%- endfor %}
+  ],
+  "settings": {
+    "git.autoRepositoryDetection": false,
+    "git.openRepositoryInParentFolders": "never"
+  }
+}

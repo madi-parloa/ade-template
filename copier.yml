@@ -8,7 +8,7 @@ _tasks:
     when: "{{ _copier_operation == 'copy' }}"
   - command: "git init && git add -A && git commit --no-gpg-sign -m 'ADE scaffold'"
     when: "{{ _copier_operation == 'copy' }}"
-  - command: "/Applications/Cursor.app/Contents/MacOS/Cursor \"$(pwd)\" &>/dev/null &"
+  - command: "open -a Cursor '{{ ade_name }}.code-workspace'"
     when: "{{ _copier_operation == 'copy' }}"
 
 ade_name:
@@ -23,5 +23,6 @@ description:
 
 portfolio_file:
   type: str
-  help: "Path to a custom repo list (one git URL per line, absolute path). Leave empty for default Parloa portfolio."
+  help: "Path to a custom repo list (one git URL per line, absolute path). Leave
+    empty for default Parloa portfolio."
   default: ""

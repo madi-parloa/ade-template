@@ -22,6 +22,7 @@ Copier prompts for a name and description, renders the template, clones all repo
 | `README.md` | Human orientation |
 | `ade-repos.txt` | Git URLs of repos to clone |
 | `ade-install.sh` | Clones/pulls repos, installs GSD + kitchens |
+| `<ade_name>.code-workspace` | Multi-root Cursor workspace listing every portfolio repo. Rendered by Copier from `ade-repos.txt` on `copier copy` / `copier update`; opened automatically on first scaffold only. Re-render after editing `ade-repos.txt` with `uvx copier update --trust --force` |
 | `.planning/PROJECT.md` | GSD project definition |
 | `.planning/codebase/*.md` | Pre-seeded codebase intelligence (7 files) |
 | `.cursor/` | Workspace-local Cursor config (populated by install) |
