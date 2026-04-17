@@ -2,7 +2,10 @@ _min_copier_version: "9.0.0"
 _subdirectory: template
 
 _tasks:
-  - "bash install.sh"
+  - >-
+    {% if portfolio_file %}cp {{ portfolio_file }} ade-repos.txt{% endif %}
+  - "bash ade-install.sh"
+  - "cursor ."
 
 ade_name:
   type: str
@@ -13,3 +16,8 @@ description:
   type: str
   help: One-line purpose for this ADE
   default: Parloa infra experiments
+
+portfolio_file:
+  type: str
+  help: Path to a custom repo list (one git URL per line). Leave empty to use the default Parloa portfolio.
+  default: ""

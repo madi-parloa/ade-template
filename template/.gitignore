@@ -1,7 +1,7 @@
-# Cursor workspace-local config (populated by install.sh / GSD / kitchens)
+# Cursor workspace-local config (populated by ade-install.sh / GSD / kitchens)
 .cursor/
 
-# Cloned portfolio repos (created by install.sh from portfolio.txt)
+# Cloned portfolio repos (created by ade-install.sh from ade-repos.txt)
 parloa-infra/
 parloa-infra-global/
 parloa-infra-it/
