@@ -20,3 +20,6 @@ git@github.com:parloa/open-kitchen.git
 
 # Agent guardrails (policy-gate, hooks, custom skills/rules)
 git@github.com:madi-parloa/cursor-self-hosted-agent.git
+
+# ADE template (this template's source repo)
+git@github.com:madi-parloa/ade-template.git
