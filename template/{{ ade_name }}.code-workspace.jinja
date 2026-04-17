@@ -14,11 +14,15 @@
 {
   "folders": [
 {%- for name in repo_names %}
-    {"name": {{ name | tojson }}, "path": {{ name | tojson }}}{{ "," if not loop.last else "" }}
+    {"name": {{ name | tojson }}, "path": {{ name | tojson }}},
 {%- endfor %}
+    {"name": {{ (ade_name ~ " (root)") | tojson }}, "path": "."}
   ],
   "settings": {
     "git.autoRepositoryDetection": false,
-    "git.openRepositoryInParentFolders": "never"
+    "git.openRepositoryInParentFolders": "never",
+    "files.exclude": {
+      "**/.DS_Store": true
+    }
   }
 }
