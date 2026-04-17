@@ -63,8 +63,8 @@ folders = data.get("folders", [])
 settings = data.get("settings", {})
 problems = []
 
-if len(folders) != 14:
-    problems.append(f"expected 14 folders, got {len(folders)}")
+if len(folders) != 15:
+    problems.append(f"expected 15 folders (14 portfolio + ADE root), got {len(folders)}")
 if settings.get("git.autoRepositoryDetection") is not False:
     problems.append(
         f"git.autoRepositoryDetection should be False, "
@@ -75,9 +75,21 @@ if settings.get("git.openRepositoryInParentFolders") != "never":
         f"git.openRepositoryInParentFolders should be 'never', "
         f"got {settings.get('git.openRepositoryInParentFolders')!r}"
     )
+if settings.get("files.exclude", {}).get("**/.DS_Store") is not True:
+    problems.append("settings.files.exclude should hide **/.DS_Store")
 for i, f in enumerate(folders):
     if not isinstance(f, dict) or "name" not in f or "path" not in f:
         problems.append(f"malformed folder entry at index {i}: {f!r}")
+if folders and folders[-1].get("path") != ".":
+    problems.append(
+        f"last folder should be the ADE root at path '.', "
+        f"got {folders[-1] if folders else None!r}"
+    )
+if folders and folders[-1].get("name") != "test-ade (root)":
+    problems.append(
+        f"last folder name should be 'test-ade (root)' "
+        f"(templated from ade_name), got {folders[-1].get('name')!r}"
+    )
 
 if problems:
     print("FAIL:", file=sys.stderr)
@@ -97,8 +109,8 @@ python3 -c "
 import json
 with open('$WS') as f:
     data = json.load(f)
-assert len(data['folders']) == 14, 'folders count wrong after update'
-print('  ok: update preserved 14 folders')
+assert len(data['folders']) == 15, 'folders count wrong after update'
+print('  ok: update preserved 15 folders')
 "
 
 echo ""
