@@ -13,9 +13,23 @@ _tasks:
         CLONE_FAILURES=0
         while read -r url; do
           dir="$(basename "$url" .git)"
-          if [ -d "$dir" ]; then
+
+          # Already a valid git repo? Leave it alone.
+          if git -C "$dir" rev-parse --git-dir >/dev/null 2>&1; then
             continue
           fi
+
+          # Path exists but isn't a git repo.
+          if [ -e "$dir" ]; then
+            # Safe to reclone only if it's an empty directory; otherwise warn and skip.
+            if [ -d "$dir" ] && [ -z "$(ls -A "$dir")" ]; then
+              rmdir "$dir"
+            else
+              echo "    WARNING: $dir exists and is not a git repo — skipping"
+              continue
+            fi
+          fi
+
           echo "==> cloning $dir"
           if ! git clone "$url" "$dir"; then
             echo "    WARNING: failed to clone $url (check access rights)"
