@@ -18,8 +18,9 @@ Copier prompts for a name and description, renders the template, clones all repo
 
 | File | Purpose |
 |------|---------|
-| `AGENTS.md` | Agent-level workspace context |
+| `AGENTS.md` | Agent-level workspace context (includes an "Agentic stack" summary rendered from your Copier answers) |
 | `README.md` | Human orientation |
+| `agentic-stack.md` | Declared defaults + opt-in MCP integrations for this ADE, with the exact `agent-guardrails/install.sh --with=...` command to activate them |
 | `ade-repos.txt` | Git URLs of repos to clone |
 | `<ade_name>.code-workspace` | Multi-root Cursor workspace listing every portfolio repo. Rendered by Copier from `ade-repos.txt` on `copier copy` / `copier update`; opened automatically on first scaffold only. Re-render after editing `ade-repos.txt` with `uvx copier update --trust --force` |
 | `.planning/PROJECT.md` | GSD project definition |
@@ -50,7 +51,17 @@ for d in */; do [ -d "$d/.git" ] && git -C "$d" pull --ff-only; done
 ## Customizing
 
 1. **Different repos** — re-run copier with `--data portfolio_file=/path/to/my-repos.txt`, or edit `ade-repos.txt` and run `uvx copier update --trust` to clone any newly listed repos.
-2. **Fork this template** — `gh repo fork madi-parloa/ade-template` and scaffold from your fork.
+2. **Optional agentic integrations** — Copier asks four questions that declare which `agent-guardrails` MCP extensions should be considered active for this ADE:
+
+   | Question | Values | Default | Effect |
+   |----------|--------|---------|--------|
+   | `include_code_graph_mcp` | `none` / `cody` / `augment` | `none` | Cross-repo code-graph retrieval via Sourcegraph Cody (OSS) or Augment (commercial). Highest-ROI optional integration. |
+   | `include_code_mode_mcp` | `true` / `false` | `false` | Python-as-tool-calls (`mcp-code-executor`). Low ROI for Terraform/YAML. |
+   | `include_letta_memory_mcp` | `true` / `false` | `false` | Letta/MemGPT self-editing memory. Requires a running Letta instance. |
+   | `include_eval_pipeline` | `none` / `latitude` / `braintrust` | `none` | Documents a production→eval platform. Docs-only; nothing is installed. |
+
+   Your answers render into `agentic-stack.md` along with the exact `./agent-guardrails/install.sh --with=<csv>` activation command. Nothing is installed automatically — this matches the existing kitchen policy (user/system-level installs are never auto-run). See `docs/DECISIONS.md`.
+3. **Fork this template** — `gh repo fork madi-parloa/ade-template` and scaffold from your fork.
 
 ## Post-install notes
 

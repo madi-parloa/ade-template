@@ -1,0 +1,81 @@
+# Agentic stack: {{ ade_name }}
+
+Quick reference for the agentic mechanics active (or declared) in this ADE. Full rationale per integration lives in `agent-guardrails/docs/agentic-stack-map.md` — this file is the ADE-specific summary rendered from your Copier answers.
+
+## Always on (default)
+
+- **GSD workflow spine** — workspace-local install in `.cursor/` (run on every `copier update`)
+- **Review chain + claim-verifier** — `skills/review-chain/` and `skills/claim-verifier/` via `agent-guardrails`
+- **Policy-gate MCP + hook enforcement** — `agent-guardrails/mcp-policy-gate/`
+- **Pre-seeded codebase intel** — `.planning/codebase/*.md` (7 files)
+
+## Declared optional integrations for this ADE
+
+{%- set _optional_ids = [] -%}
+{%- if include_code_graph_mcp == "cody" -%}{%- set _ = _optional_ids.append("code-graph-cody") -%}{%- endif -%}
+{%- if include_code_graph_mcp == "augment" -%}{%- set _ = _optional_ids.append("code-graph-augment") -%}{%- endif -%}
+{%- if include_code_mode_mcp -%}{%- set _ = _optional_ids.append("code-mode") -%}{%- endif -%}
+{%- if include_letta_memory_mcp -%}{%- set _ = _optional_ids.append("letta-memory") -%}{%- endif %}
+
+{% if _optional_ids %}
+| ID | Purpose | Requires |
+|----|---------|----------|
+{% if include_code_graph_mcp == "cody" -%}
+| `code-graph-cody` | Cross-repo graph retrieval (Sourcegraph Cody, OSS) | `SRC_ACCESS_TOKEN`, optional self-hosted `SRC_ENDPOINT` |
+{% endif -%}
+{% if include_code_graph_mcp == "augment" -%}
+| `code-graph-augment` | Cross-repo graph retrieval (Augment, commercial) | `AUGMENT_API_KEY` |
+{% endif -%}
+{% if include_code_mode_mcp -%}
+| `code-mode` | Python-as-tool-calls via `mcp-code-executor` | — (sandboxed by default) |
+{% endif -%}
+{% if include_letta_memory_mcp -%}
+| `letta-memory` | Self-editing memory blocks (Letta/MemGPT lineage) | `LETTA_API_KEY`, `LETTA_AGENT_ID` |
+{% endif %}
+
+### How to activate
+
+These are **not** auto-installed into your user-global `~/.cursor/` config, consistent with the kitchen policy (see `docs/DECISIONS.md` in the template source). Apply them once, manually:
+
+```bash
+./agent-guardrails/install.sh --with={{ _optional_ids | join(",") }}
+```
+
+Re-running `copier update` will regenerate this file if you change your answers, but **will not** re-run the `install.sh` command — that stays explicit.
+
+Configure the required env vars in your shell (export in `~/.zshrc`, use a secret manager, etc.) before restarting Cursor.
+
+{% else %}
+No optional MCP integrations were selected during scaffolding. Run `copier update` and answer the prompts to change this, or edit `agent-guardrails/mcp-optional/` and `~/.cursor/mcp.json` by hand.
+
+See `agent-guardrails/mcp-optional/README.md` for the full catalog.
+{% endif %}
+
+{% if include_eval_pipeline != "none" %}
+## Production → eval pipeline
+
+Platform of record for this ADE: **{{ include_eval_pipeline | capitalize }}**.
+
+This integration is **docs-only** — it is not installed as an MCP. Adoption guidance and trade-offs live in `agent-guardrails/docs/optional-integrations.md`. Revisit once you have a formal eval suite beyond the transcript-based evals in `agent-guardrails/evals/`.
+{%- else %}
+## Production → eval pipeline
+
+Not declared for this ADE. Adopt once your eval story is mature; see `agent-guardrails/docs/optional-integrations.md` for Latitude / Braintrust trade-offs.
+{%- endif %}
+
+## Not in scope here
+
+Intentionally **not** integrated into this ADE — these are either separate agent runtimes or infra-level wrappers. See `agent-guardrails/docs/optional-integrations.md` for adoption criteria.
+
+- **CodeAct** (OpenHands, `langgraph-codeact`) — alternative runtime, run alongside
+- **GEPA / TextGrad** (DSPy) — offline prompt optimization
+- **Durable execution** (Temporal / Restate / DBOS) — infra-level wrapper
+
+## Changing your choices
+
+```bash
+cd {{ ade_name }}
+uvx copier update --trust
+```
+
+Answer the optional-integration prompts differently. This file re-renders; apply the change by running the `install.sh --with=` command above.
