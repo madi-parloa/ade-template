@@ -48,7 +48,24 @@ _tasks:
         npx -y get-shit-done-cc@latest --local --cursor
   - command: "git init && git add -A && git commit -m 'ADE scaffold'"
     when: "{{ _copier_operation == 'copy' }}"
-  - command: "open -na Cursor '{{ ade_name }}.code-workspace'"
+  - command:
+      - bash
+      - -c
+      - |
+        set -eu
+        ws='{{ ade_name }}.code-workspace'
+        # Prefer the cursor CLI: --new-window reliably opens a fresh window
+        # via Cursor's IPC. `open -na Cursor <file>` does NOT — Cursor's
+        # single-instance lock routes the file open back to the primary
+        # process and the new bundle instance exits. Fall back to `open -a`
+        # (reuses window) only if no cursor binary is available.
+        if command -v cursor >/dev/null 2>&1; then
+          cursor --new-window "$ws"
+        elif [ -x /Applications/Cursor.app/Contents/Resources/app/bin/cursor ]; then
+          /Applications/Cursor.app/Contents/Resources/app/bin/cursor --new-window "$ws"
+        else
+          open -a Cursor "$ws"
+        fi
     when: "{{ _copier_operation == 'copy' }}"
 
 ade_name:
