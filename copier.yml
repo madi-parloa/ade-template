@@ -66,3 +66,43 @@ portfolio_file:
   help: "Path to a custom repo list (one git URL per line, absolute path). Leave
     empty for default Parloa portfolio."
   default: ""
+
+# --- Optional agentic-stack integrations ---
+# These populate docs/agentic-stack.md and AGENTS.md so the agent and user
+# know what's declared active for this ADE. They are NOT auto-installed into
+# the user's ~/.cursor/ — apply them manually by running
+#   ./agent-guardrails/install.sh --with=<derived list>
+# after scaffolding. This matches the existing kitchen policy (user/system-
+# level installs are never auto-run; see docs/DECISIONS.md).
+
+include_code_graph_mcp:
+  type: str
+  help: "Cross-repo code-graph MCP for better multi-repo reasoning. Highest-ROI
+    optional integration for Parloa portfolios. 'none' to skip."
+  choices:
+    - none
+    - cody
+    - augment
+  default: none
+
+include_code_mode_mcp:
+  type: bool
+  help: "Enable the Python-as-tool-calls MCP (mcp-code-executor)? Large token
+    savings on tool-heavy flows; low ROI for Terraform/YAML work."
+  default: false
+
+include_letta_memory_mcp:
+  type: bool
+  help: "Enable the Letta/MemGPT self-editing memory MCP? Requires a running
+    Letta instance (self-hosted or Letta Cloud)."
+  default: false
+
+include_eval_pipeline:
+  type: str
+  help: "Document a production->eval pipeline platform for this ADE. Docs-only;
+    nothing is auto-installed. 'none' to omit the section entirely."
+  choices:
+    - none
+    - latitude
+    - braintrust
+  default: none

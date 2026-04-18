@@ -42,6 +42,25 @@ You are running in an ADE (Agent Dev Environment). This workspace contains multi
 - Follow existing commit message conventions in each repo.
 - Run linters and formatters before committing.
 
-## Updated Section
+## Agentic stack
 
-This line was added in v0.4.1 to test copier update.
+This ADE runs on the `agent-guardrails` stack. Defaults always on:
+
+- **GSD** workflow spine (workspace-local `.cursor/`)
+- **Review chain + claim-verifier** — runs before every PR; hostile-review line-number claims are fact-checked against the repo
+- **Policy-gate MCP + hook enforcement** — see `agent-guardrails/README.md`
+- **Pre-seeded `.planning/codebase/*.md`** — 7-file intelligence layer
+
+{% set _any_optional = (include_code_graph_mcp != "none") or include_code_mode_mcp or include_letta_memory_mcp or (include_eval_pipeline != "none") -%}
+{% if _any_optional -%}
+Optional integrations declared for this ADE (see `agentic-stack.md`):
+{% if include_code_graph_mcp == "cody" %}- Sourcegraph Cody (code-graph retrieval){% endif %}
+{% if include_code_graph_mcp == "augment" %}- Augment Context Engine (code-graph retrieval){% endif %}
+{% if include_code_mode_mcp %}- `mcp-code-executor` (Python-as-tool-calls){% endif %}
+{% if include_letta_memory_mcp %}- Letta/MemGPT memory blocks{% endif %}
+{% if include_eval_pipeline != "none" %}- Production→eval platform: {{ include_eval_pipeline | capitalize }} (docs-only){% endif %}
+
+These are **not** auto-installed. Follow the activation command in `agentic-stack.md`.
+{% else -%}
+No optional agentic integrations are declared for this ADE. Full catalog: `agentic-stack.md` and `agent-guardrails/docs/agentic-stack-map.md`.
+{% endif -%}
