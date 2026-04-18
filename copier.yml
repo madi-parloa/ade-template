@@ -93,8 +93,8 @@ include_code_mode_mcp:
 
 include_letta_memory_mcp:
   type: bool
-  help: "Enable the Letta/MemGPT self-editing memory MCP? Requires a running
-    Letta instance (self-hosted or Letta Cloud)."
+  help: "Enable the Letta/MemGPT self-editing memory MCP? Requires a running Letta
+    instance (self-hosted or Letta Cloud)."
   default: false
 
 include_eval_pipeline:
