@@ -36,16 +36,18 @@ uvx copier update --trust --skip-answered
 
 `copier update` is the single entry point. It:
 
-1. Merges template/docs changes (AGENTS.md, `.planning/codebase/*`, rendered Cursor workspace, etc.) via 3-way diff.
-2. Clones any repos newly added to `ade-repos.txt`. Already-cloned repos are **not** `git pull`'d — safe even if you have WIP on feature branches.
+1. Merges template/docs changes (AGENTS.md, `.planning/codebase/*`, rendered Cursor workspace, and `ade-repos.txt` itself — via 3-way diff, so any repos newly added to the template's default list land automatically while your local edits are preserved; see D-019).
+2. Clones any repos newly added to `ade-repos.txt` (from the merge above, or from your own edits). Already-cloned repos are **not** `git pull`'d — safe even if you have WIP on feature branches.
 3. Refreshes GSD (`npx -y get-shit-done-cc@latest --local --cursor`).
-4. Auto-commits its own output as `chore: copier update to <new_commit>` so the working tree is clean when the command returns (see D-018).
+4. Auto-commits its own output as `chore: copier update to <new_commit>` so the working tree is clean when the command returns (see D-018, D-020).
 
 **One-command-forever promise (v0.8.4+):** `uvx copier update --trust --skip-answered` requires no pre-work and no post-work. It won't prompt, it won't leave the tree dirty, and the next update is never blocked by a forgotten commit from this one. If copier's 3-way merge produces unresolved conflict markers in any file, the auto-commit is aborted with a loud message and the tree is left dirty for you to resolve — same as pre-v0.8.4 behavior, no regression in the conflict case.
 
 `--skip-answered` suppresses re-prompting for answers already stored in `.copier-answers.yml` (see D-017). Drop it if you want to re-answer questions — typically only needed when adding an optional agentic-stack integration (`include_code_graph_mcp`, etc.), for which `agentic-stack.md` has its own documented command.
 
-As of **v0.8.3**, portfolio sync and GSD install run **once per update** in the real destination (prior versions re-ran them three times — see D-015). As of **v0.8.4**, the update auto-commits when done (D-018), so consecutive `copier update` invocations work without any manual `git commit` between them.
+**`portfolio_file` is a scaffold-only input.** If you passed `--data portfolio_file=...` on `copier copy`, that was a one-time seed of `ade-repos.txt`. After scaffold, `ade-repos.txt` belongs to your ADE's git repo — edit it directly, commit, and the next `copier update` will clone new entries. Re-passing `portfolio_file` on update is a no-op (and before v0.8.5 it would silently break updates when the source file moved). See D-019.
+
+As of **v0.8.3**, portfolio sync and GSD install run **once per update** in the real destination (prior versions re-ran them three times — see D-015). As of **v0.8.4**, the update auto-commits when done; as of **v0.8.5**, the auto-commit runs as an `_migrations` step *after* copier's final merge, so consecutive `copier update` invocations are never blocked by a dirty tree (see D-020).
 
 **Pulling existing clones** — if you want to update all already-cloned repos (not just add new ones), run this one-liner yourself. It's deliberately not automatic because `git pull` over a user's WIP is unsafe:
 
@@ -55,7 +57,7 @@ for d in */; do [ -d "$d/.git" ] && git -C "$d" pull --ff-only; done
 
 ## Customizing
 
-1. **Different repos** — re-run copier with `--data portfolio_file=/path/to/my-repos.txt`, or edit `ade-repos.txt` and run `uvx copier update --trust --skip-answered` to clone any newly listed repos.
+1. **Different repos** — at scaffold time, pass `--data portfolio_file=/path/to/my-repos.txt` to seed `ade-repos.txt` from your own file. After scaffold, `ade-repos.txt` is owned by your ADE — edit it directly and run `uvx copier update --trust --skip-answered` to clone any newly listed repos. The template's own additions to the default list land on the same update via copier's 3-way merge. See D-019.
 2. **Optional agentic integrations** — Copier asks four questions that declare which `agent-guardrails` MCP extensions should be considered active for this ADE:
 
    | Question | Values | Default | Effect |

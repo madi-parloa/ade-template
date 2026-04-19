@@ -193,4 +193,60 @@ print('  ok: update preserved 16 folders')
 "
 
 echo ""
+echo "==> Scenario: portfolio_file was provided at scaffold, now missing on update (D-019)..."
+PORTFOLIO_SCRATCH="$SCRATCH/my-portfolio.txt"
+cat > "$PORTFOLIO_SCRATCH" <<'EOF'
+# Custom portfolio for the portfolio-gone scenario.
+https://github.com/example/one.git
+https://github.com/example/two.git
+EOF
+TEST_ADE2="$SCRATCH/test-ade-custom"
+echo "==> Running copier copy with portfolio_file=$PORTFOLIO_SCRATCH..."
+uvx copier copy --trust --defaults \
+  --data ade_name=test-ade-custom \
+  --data portfolio_file="$PORTFOLIO_SCRATCH" \
+  "$TEMPLATE_COPY" "$TEST_ADE2"
+
+# ade-repos.txt in the destination should have been seeded from the custom file.
+if ! grep -qF "example/one.git" "$TEST_ADE2/ade-repos.txt"; then
+  echo "FAIL: portfolio_file seed didn't land in ade-repos.txt on copy" >&2
+  cat "$TEST_ADE2/ade-repos.txt" >&2
+  exit 1
+fi
+echo "  ok: portfolio_file seeded ade-repos.txt on copy"
+
+echo "==> Deleting the portfolio source file to simulate 'user moved/deleted it'..."
+rm -f "$PORTFOLIO_SCRATCH"
+[ ! -f "$PORTFOLIO_SCRATCH" ] || { echo "FAIL: portfolio file still exists" >&2; exit 1; }
+
+echo "==> Bumping template to v0.0.2 for an update that should survive the missing source..."
+(
+  cd "$TEMPLATE_COPY"
+  printf '\n<!-- bump v0.0.2 for portfolio-gone test -->\n' >> template/README.md.jinja
+  git -c user.email=test@test -c user.name=test commit -aq -m "bump 0.0.2" --no-gpg-sign
+  git tag v0.0.2
+) >/dev/null
+
+cd "$TEST_ADE2"
+echo "==> Running copier update with portfolio_file gone (must NOT fail)..."
+if ! uvx copier update --trust --defaults; then
+  echo "FAIL: copier update failed when portfolio_file was missing — D-019 regression" >&2
+  exit 1
+fi
+
+# ade-repos.txt content must be unchanged (still the custom seed).
+if ! grep -qF "example/one.git" ade-repos.txt; then
+  echo "FAIL: ade-repos.txt lost its custom content after update with missing portfolio_file" >&2
+  cat ade-repos.txt >&2
+  exit 1
+fi
+# Tree must be clean after auto-commit.
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  echo "FAIL: tree dirty after portfolio-gone update" >&2
+  git status --short >&2
+  exit 1
+fi
+echo "  ok: update succeeded with missing portfolio_file; ade-repos.txt preserved; tree clean"
+
+echo ""
 echo "==> All tests passed"
