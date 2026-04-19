@@ -25,10 +25,13 @@ uvx copier copy --trust git+https://github.com/madi-parloa/ade-template.git <thi
 uvx copier update --trust --skip-answered
 ```
 
-Single entry point. Pulls template/docs changes (AGENTS.md guidance, `.planning/codebase/*` intel, refreshed workspace file) AND:
+Single entry point. Safe to run on a clean tree at any time — no prompts, no manual follow-up. Pulls template/docs changes (AGENTS.md guidance, `.planning/codebase/*` intel, refreshed workspace file) AND:
 
 - clones any repos newly added to `ade-repos.txt` (existing repos untouched — safe for WIP branches);
-- refreshes GSD via `npx -y get-shit-done-cc@latest --local --cursor`.
+- refreshes GSD via `npx -y get-shit-done-cc@latest --local --cursor`;
+- auto-commits its own output as `chore: copier update to <new_commit>` so the working tree is clean when the command returns.
+
+That auto-commit means consecutive updates work with no manual `git commit` in between. If copier's 3-way merge leaves unresolved conflict markers in any file, auto-commit is skipped and the tree is left dirty for you to resolve manually.
 
 ## Pulling existing clones (optional, manual)
 

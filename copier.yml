@@ -97,6 +97,57 @@ _tasks:
           open -a Cursor "$ws"
         fi
     when: "{{ _copier_operation == 'copy' }}"
+  # Final task (update only): auto-commit copier-managed changes so the working
+  # tree is clean after every successful update. This makes `uvx copier update`
+  # a one-command-forever operation — the next update won't be blocked by a
+  # dirty tree left over from this one. See docs/DECISIONS.md D-018.
+  #
+  # Safety: copier refuses updates on a dirty tree, so by the time this task
+  # runs, every dirty path in the destination is copier-managed by definition.
+  # `git add -A` is therefore safe.
+  #
+  # If copier's 3-way merge left conflict markers, we abort auto-commit with a
+  # loud message so the user resolves them manually — committing unresolved
+  # conflicts would be worse than leaving the tree dirty.
+  - command:
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        case "$PWD" in
+          */copier._main.*)
+            echo "==> [skip] copier temp render dir (auto-commit runs in destination): $PWD" >&2
+            exit 0
+            ;;
+        esac
+        if ! git rev-parse --git-dir >/dev/null 2>&1; then
+          echo "==> [auto-commit] not a git repo — skipping" >&2
+          exit 0
+        fi
+        # Nothing changed? Update was a no-op. Exit clean.
+        if git diff --quiet && git diff --cached --quiet; then
+          echo "==> [auto-commit] nothing to commit"
+          exit 0
+        fi
+        # Detect unresolved 3-way merge conflict markers in any modified file.
+        conflicted=""
+        while IFS= read -r f; do
+          [ -f "$f" ] || continue
+          if grep -qE '^(<{7}|={7}|>{7})( |$)' "$f" 2>/dev/null; then
+            conflicted="${conflicted}${f}"$'\n'
+          fi
+        done < <(git diff --name-only; git diff --cached --name-only)
+        if [ -n "$conflicted" ]; then
+          echo "==> [auto-commit] merge conflict markers detected — NOT auto-committing:" >&2
+          printf '    %s\n' $conflicted >&2
+          echo "    Resolve conflicts manually, then: git add -A && git commit" >&2
+          exit 0
+        fi
+        new_commit="$(awk '/^_commit:/ {print $2; exit}' .copier-answers.yml 2>/dev/null || echo unknown)"
+        echo "==> [auto-commit] copier update to ${new_commit}"
+        git add -A
+        git commit -m "chore: copier update to ${new_commit}"
+    when: "{{ _copier_operation == 'update' }}"
 
 ade_name:
   type: str
