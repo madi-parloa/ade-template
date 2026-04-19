@@ -56,9 +56,11 @@ The prescribed update flow for any ADE is:
 uvx copier recopy --trust --skip-answered --overwrite
 ```
 
-`recopy` re-renders every template-owned file from the current template and writes the result to the destination. It does not perform copier's structural 3-way merge (`copier update` does). Combined with `_skip_if_exists: []` in `copier.yml`, every template-owned file is overwritten on every recopy. The contract is: **whatever the latest template version renders is what's on disk after the command returns.**
+`recopy` re-renders every template-owned file from the current template and writes the result to the destination. It does not perform copier's structural 3-way merge (`copier update` does). Combined with a near-empty `_skip_if_exists` in `copier.yml`, every template-owned file is overwritten on every recopy. The contract is: **whatever the latest template version renders is what's on disk after the command returns.**
 
 This is the right model because every template-owned file in the ADE is a derived artifact (AGENTS.md, CLAUDE.md, `.planning/codebase/*.md`, `.gitignore`, the workspace file, `ade-repos.txt`). There is no legitimate "user diverged from template" state for these files — if a user wants a different portfolio, they change the answer and recopy. Three-way merge on derived artifacts only hides template evolution.
+
+The one principled exception is `.planning/PROJECT.md` when `include_gsd_docs=true`. After the initial scaffold, gsd-docs onboarding replaces the local file with a symlink into shared storage; from that point ownership of the file's content belongs to the gsd-docs repo, not this template. `_skip_if_exists` is Jinja-gated to skip that single path when the toggle is on. See D-026.
 
 See D-022 for the full rationale, flag anatomy, and the finalize task that handles git init on first scaffold + auto-commit on recopy.
 
@@ -161,8 +163,8 @@ See `copier.yml` for the authoritative current state. Summary:
 
 - `_subdirectory: template` — only files under `template/` are rendered into the output.
 - `_exclude: ["_*.jinja", ...]` — keeps the `_portfolio.jinja` macro file (which lives at the template root) out of the render.
-- `_skip_if_exists: []` — nothing is protected on recopy; template always wins.
-- Questions: `ade_name`, `description`, `include_gsd_docs`, `include_agent_guardrails`, `include_cursor_self_hosted_agent`, `portfolio_groups`, `extra_repos`, the four `include_*_mcp` / `include_eval_pipeline` agentic-stack toggles, `default_org` (hidden), `portfolio_file` (hidden, inert — see D-005).
+- `_skip_if_exists` — one Jinja-gated entry for `.planning/PROJECT.md` when `include_gsd_docs=true` (ownership transfers to gsd-docs post-scaffold, see D-026); everything else is unprotected and template-wins.
+- Questions: `ade_name`, `description`, `include_gsd_docs`, `gsd_docs_handle` (when gsd-docs enabled), `include_agent_guardrails`, `include_cursor_self_hosted_agent`, `portfolio_groups`, `extra_repos`, the four `include_*_mcp` / `include_eval_pipeline` agentic-stack toggles, `default_org` (hidden), `portfolio_file` (hidden, inert — see D-005).
 - `_tasks`: portfolio sync → GSD install → gsd-docs onboard (conditional) → finalize (git init + ADE scaffold on first copy; auto-commit on recopy).
 
 ## Known limitations (v1)

@@ -24,7 +24,7 @@ The prescribed update command is:
 uvx copier recopy --trust --skip-answered --overwrite
 ```
 
-`copier recopy` re-applies the current template fresh (no 3-way merge), so whatever is in the latest template is what lands on disk. Combined with `_skip_if_exists: []`, every template-owned file is overwritten on every recopy — no drift. See D-022.
+`copier recopy` re-applies the current template fresh (no 3-way merge), so whatever is in the latest template is what lands on disk. Combined with a near-empty `_skip_if_exists`, every template-owned file is overwritten on every recopy — no drift. See D-022. The single exception is `.planning/PROJECT.md` when `include_gsd_docs=true`: ownership transfers to gsd-docs after the initial scaffold, see D-026.
 
 `copier update` (3-way merge) is not the prescribed path. It works if invoked, but recopy is what the scaffolded README and docs point users at, because the portfolio (ade-repos.txt, code-workspace) is fully derived from answers — there's nothing to merge.
 
@@ -73,5 +73,5 @@ When `include_gsd_docs=true`, `template/CLAUDE.md.jinja` and `template/AGENTS.md
 - `_tasks` run in the output directory, not in this repo.
 - Every `_task` body must start with the `*/copier._main.*) exit 0` pwd gate — without it, the task runs in copier's temp render dirs as well.
 - Quote all Jinja variables interpolated into shell commands.
-- `_skip_if_exists: []` is intentional — it's the mechanism that enforces "template wins" on recopy.
+- `_skip_if_exists` is near-empty by design — it's the mechanism that enforces "template wins" on recopy. The one Jinja-gated entry for `.planning/PROJECT.md` (when `include_gsd_docs=true`) is a deliberate ownership boundary, not a leak; see D-026 before adding more.
 - `_exclude` keeps `_*.jinja` files (including `_portfolio.jinja`) from being rendered into the output; they're for internal Jinja imports only.

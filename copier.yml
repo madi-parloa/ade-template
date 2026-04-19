@@ -18,11 +18,16 @@ _exclude:
   - .DS_Store
   - .svn
 
-# Every template-owned file is re-rendered on `copier recopy`. No per-file
-# "template wins unless destination already has it" exceptions — the whole
-# point of the recopy model is that the latest template is what you get.
-# See docs/DECISIONS.md D-022.
-_skip_if_exists: []
+# Template-owned files are re-rendered on `copier recopy`; that's the whole
+# point of the recopy model. The one exception is `.planning/PROJECT.md`
+# when gsd-docs is enabled: ownership of PROJECT.md transfers to gsd-docs
+# after the initial scaffold (gsd-docs/bin/new-project.sh migrates it to
+# shared storage and replaces the local file with a symlink into the
+# shared project). On subsequent recopies the template treats PROJECT.md
+# as opaque — writing it would clobber the symlink (typechange) and
+# overwrite shared content every run. See docs/DECISIONS.md D-022, D-026.
+_skip_if_exists:
+  - "{% if include_gsd_docs %}.planning/PROJECT.md{% endif %}"
 
 _tasks:
   # Task 1: clone every URL in ade-repos.txt (missing only; existing repos are

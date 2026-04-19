@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # End-to-end test for the ade-template copier template.
 #
-# Exercises the recopy model (see docs/DECISIONS.md D-022, D-023, D-024):
+# Exercises the recopy model (see docs/DECISIONS.md D-022, D-023, D-024, D-026):
 #   - defaults scaffold + auto-commit
 #   - recopy clones new repos added via template bump
 #   - no-op recopy produces no new commits
+#   - .planning/PROJECT.md symlink into gsd-docs survives recopy (D-026)
+#   - local edits to generated files (ade-repos.txt, workspace) are reverted on recopy
 #   - partial selection (some toggles / groups off)
 #   - short-name DSL resolves correctly for bare / org-prefixed / full-URL inputs
-#   - local edits to generated files (ade-repos.txt, workspace) are reverted on recopy
 #
 # Stubs `open`, `npx`, and `git clone` so the test runs offline. Tests the
 # working tree, not HEAD — copies the template sans .git so uncommitted
@@ -108,7 +109,7 @@ mkdir -p "$TEMPLATE_COPY"
 # ----------------------------------------------------------------------------
 TEST_ADE="$SCRATCH/test-ade"
 
-echo "==> [1/6] Scaffolding with defaults (all toggles, all groups, empty extras)..."
+echo "==> [1/7] Scaffolding with defaults (all toggles, all groups, empty extras)..."
 uvx copier copy --trust --defaults \
   --data ade_name=test-ade \
   --data gsd_docs_handle=testuser \
@@ -245,7 +246,7 @@ echo "  ok: 1 'ADE scaffold' commit, clean tree"
 # Scenario 2: recopy picks up a new repo added to a group in the template bump.
 # ----------------------------------------------------------------------------
 echo ""
-echo "==> [2/6] Template bump adds a repo to core-infra; recopy must pick it up..."
+echo "==> [2/7] Template bump adds a repo to core-infra; recopy must pick it up..."
 (
   cd "$TEMPLATE_COPY"
   python3 - <<'PY'
@@ -298,7 +299,7 @@ echo "  ok: recopy cloned parloa-newthing/, updated ade-repos.txt, auto-committe
 # Scenario 3: no-op recopy — template unchanged, recopy must add 0 commits.
 # ----------------------------------------------------------------------------
 echo ""
-echo "==> [3/6] Re-running recopy at the same version must be a no-op..."
+echo "==> [3/7] Re-running recopy at the same version must be a no-op..."
 # Capture recopy stdout/stderr so we can assert that no template-owned file is
 # flagged 'conflict' or 'overwrite'. D-025: sentinel-bearing files (CLAUDE.md,
 # AGENTS.md) must render byte-identically to disk, not show as conflicts.
@@ -324,10 +325,81 @@ fi
 echo "  ok: no-op recopy produced 0 new commits, clean tree"
 
 # ----------------------------------------------------------------------------
-# Scenario 4: template wins — local edits to generated files are reverted.
+# Scenario 4: .planning/PROJECT.md symlink survives recopy (D-026).
+# Once gsd-docs onboarding replaces the local PROJECT.md with a symlink into
+# shared storage, subsequent recopies MUST NOT clobber the symlink — that
+# would show as a typechange in the gsd-docs repo and overwrite the shared
+# project's PROJECT.md on every recopy. copier.yml's _skip_if_exists entry
+# (gated on include_gsd_docs) makes copier skip that one path when it exists.
+# .planning/ is gitignored when gsd-docs is on (D-014), so this test asserts
+# filesystem state directly — which mirrors reality: the typechange in the
+# real setup lands in the gsd-docs repo, not the ade repo.
 # ----------------------------------------------------------------------------
 echo ""
-echo "==> [4/6] Local edits to ade-repos.txt must be reverted on recopy (D-022)..."
+echo "==> [4/7] .planning/PROJECT.md symlink survives recopy (D-026)..."
+
+SIM_SHARED="$SCRATCH/sim-shared"
+mkdir -p "$SIM_SHARED"
+mv "$TEST_ADE/.planning/PROJECT.md" "$SIM_SHARED/PROJECT.md"
+ln -s "$SIM_SHARED/PROJECT.md" "$TEST_ADE/.planning/PROJECT.md"
+
+# Put a unique marker in the shared target so we can detect any clobber.
+MARKER="# MARKER:shared-gsd-docs-content-do-not-overwrite"
+echo "$MARKER" >> "$SIM_SHARED/PROJECT.md"
+
+cd "$TEST_ADE"
+commits_before_symlink_recopy="$("$REAL_GIT" rev-list --count HEAD)"
+recopy_out="$SCRATCH/recopy-symlink.log"
+uvx copier recopy --trust --skip-answered --overwrite --defaults \
+  --data gsd_docs_handle=testuser 2>&1 | tee "$recopy_out"
+
+# The symlink itself must still be a symlink (lstat, not stat).
+if [ ! -L "$TEST_ADE/.planning/PROJECT.md" ]; then
+  echo "FAIL: .planning/PROJECT.md is no longer a symlink after recopy (D-026)" >&2
+  ls -la "$TEST_ADE/.planning/PROJECT.md" >&2
+  exit 1
+fi
+actual_target="$(readlink "$TEST_ADE/.planning/PROJECT.md")"
+if [ "$actual_target" != "$SIM_SHARED/PROJECT.md" ]; then
+  echo "FAIL: PROJECT.md symlink target changed (got '$actual_target', expected '$SIM_SHARED/PROJECT.md')" >&2
+  exit 1
+fi
+if ! grep -qxF "$MARKER" "$SIM_SHARED/PROJECT.md"; then
+  echo "FAIL: shared PROJECT.md was overwritten by recopy (marker lost)" >&2
+  cat "$SIM_SHARED/PROJECT.md" >&2
+  exit 1
+fi
+# Strip ANSI escape codes so the regex doesn't get fooled by copier's coloring.
+recopy_plain="$(sed 's/\x1b\[[0-9;]*m//g' "$recopy_out")"
+# copier must not WRITE the file. 'overwrite .planning/PROJECT.md' is the
+# signal that _skip_if_exists failed. 'conflict' followed by 'skip' is
+# expected: copier notices the divergence, _skip_if_exists honors it, no write.
+if echo "$recopy_plain" | grep -qE 'overwrite[[:space:]]+\.planning/PROJECT\.md'; then
+  echo "FAIL: recopy overwrote .planning/PROJECT.md (_skip_if_exists not honored)" >&2
+  exit 1
+fi
+if ! echo "$recopy_plain" | grep -qE 'skip[[:space:]]+\.planning/PROJECT\.md'; then
+  echo "FAIL: copier did not emit 'skip' for .planning/PROJECT.md — is _skip_if_exists wired up?" >&2
+  exit 1
+fi
+commits_after_symlink_recopy="$("$REAL_GIT" rev-list --count HEAD)"
+if [ "$commits_after_symlink_recopy" -ne "$commits_before_symlink_recopy" ]; then
+  echo "FAIL: symlink-preserving recopy created $((commits_after_symlink_recopy - commits_before_symlink_recopy)) extra commit(s)" >&2
+  "$REAL_GIT" log --oneline >&2
+  exit 1
+fi
+if ! "$REAL_GIT" diff --quiet || ! "$REAL_GIT" diff --cached --quiet; then
+  echo "FAIL: tree dirty after symlink-preserving recopy" >&2
+  "$REAL_GIT" status --short >&2
+  exit 1
+fi
+echo "  ok: PROJECT.md symlink preserved, shared content intact, 0 new commits"
+
+# ----------------------------------------------------------------------------
+# Scenario 5: template wins — local edits to generated files are reverted.
+# ----------------------------------------------------------------------------
+echo ""
+echo "==> [5/7] Local edits to ade-repos.txt must be reverted on recopy (D-022)..."
 # Commit a local edit so we can tell whether recopy reverts it.
 echo "git@github.com:bogus/injected.git" >> "$REPOS"
 "$REAL_GIT" -c user.email=test@test -c user.name=test commit -aq -m "local: inject bogus repo" --no-gpg-sign
@@ -354,10 +426,10 @@ fi
 echo "  ok: local edit reverted, tree clean"
 
 # ----------------------------------------------------------------------------
-# Scenario 5: partial selection — a subset of groups/toggles.
+# Scenario 6: partial selection — a subset of groups/toggles.
 # ----------------------------------------------------------------------------
 echo ""
-echo "==> [5/6] Partial selection (core-infra only, no gsd-docs, no guardrails)..."
+echo "==> [6/7] Partial selection (core-infra only, no gsd-docs, no guardrails)..."
 TEST_ADE_PARTIAL="$SCRATCH/test-partial"
 uvx copier copy --trust --defaults \
   --data ade_name=test-partial \
@@ -420,10 +492,10 @@ fi
 echo "  ok: partial selection portfolio correct, gsd-docs content omitted, .planning/ local"
 
 # ----------------------------------------------------------------------------
-# Scenario 6: short-name DSL in extra_repos resolves all three shapes.
+# Scenario 7: short-name DSL in extra_repos resolves all three shapes.
 # ----------------------------------------------------------------------------
 echo ""
-echo "==> [6/6] Short-name DSL in extra_repos resolves correctly (D-024)..."
+echo "==> [7/7] Short-name DSL in extra_repos resolves correctly (D-024)..."
 TEST_ADE_DSL="$SCRATCH/test-dsl"
 EXTRA_REPOS_INPUT=$'thing\nmadi-parloa/other-thing\ngit@github.com:foo/bar.git\n# comment — ignored\n\nparloa/parloa-newthing'
 uvx copier copy --trust --defaults \

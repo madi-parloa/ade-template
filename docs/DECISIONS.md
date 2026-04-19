@@ -520,3 +520,60 @@ that lived entirely in onboard/copier timing. Accepted because the
 alternative (parsing `gsd-docs/.gsd-docs-user` inside a `_task` and having
 it rewrite the template output) would put the render under two owners
 again — exactly what this decision removes.
+
+## D-026: Template hands `PROJECT.md` ownership to gsd-docs after scaffold
+
+**Decision:** `copier.yml` declares a single-entry `_skip_if_exists`, gated on
+`include_gsd_docs`, covering `.planning/PROJECT.md`. The template writes this
+file once — during the initial `copier copy` — and every `copier recopy`
+after that leaves it alone if it exists.
+
+**Context:** On the initial scaffold, `template/.planning/PROJECT.md.jinja`
+renders `.planning/PROJECT.md` with the user's `ade_name` and `description`.
+When `include_gsd_docs=true`, `_task` 3 runs `gsd-docs/bin/new-project.sh`,
+which moves the file into shared gsd-docs storage at
+`gsd-docs/projects/<ade_name>/PROJECT.md` and replaces the local path with a
+symlink chain:
+
+    <workspace>/.planning/PROJECT.md
+      → gsd-docs/users/<handle>/projects/<ade_name>/.planning/PROJECT.md  (symlink)
+        → gsd-docs/projects/<ade_name>/PROJECT.md                          (shared content)
+
+After that migration, the template is no longer the file's owner — gsd-docs
+is. Subsequent `copier recopy --overwrite` runs must not rewrite it:
+
+1. Writing `.planning/PROJECT.md` follows the outer `.planning/` dir-symlink
+   into `$PERSONAL_DIR`, then hits the inner file-symlink. `--overwrite`
+   unlinks the path before writing, converting the symlink into a regular
+   file. That lands as a `typechange` in the gsd-docs repo every recopy —
+   unstaged diff noise with no legitimate author intent behind it.
+2. Even if the symlink survived, the rendered template would clobber whatever
+   content the project has since evolved to in shared storage on every
+   template bump.
+
+**Implementation:** `_skip_if_exists` entries are Jinja-evaluated, so the
+entry reads:
+
+    _skip_if_exists:
+      - "{% if include_gsd_docs %}.planning/PROJECT.md{% endif %}"
+
+With `include_gsd_docs=true` it resolves to `.planning/PROJECT.md`; Copier
+checks destination existence via `os.path.exists` (which follows symlinks)
+and skips the write when it resolves. With `include_gsd_docs=false` it
+resolves to the empty string, which matches no path, so D-022's "template
+wins" applies as for every other file.
+
+**Trade-off:** D-022 says every template-owned file is re-rendered on
+`copier recopy`. This decision creates a per-file exception. Accepted
+because ownership of this specific file genuinely transfers at scaffold
+time — the boundary is real, not a leak. Template edits to
+`template/.planning/PROJECT.md.jinja` stop propagating to ADEs that have
+already scaffolded, which is correct: at that point the author's project
+content, not the template's skeleton, is what belongs in PROJECT.md.
+
+**Test coverage:** `test.sh` scenario 4 simulates the post-onboarding state
+(regular file → symlink into a shared dir), adds a marker to the shared
+target, runs `copier recopy --trust --skip-answered --overwrite`, and
+asserts the symlink is still a symlink with its original target, the marker
+survives, copier emits no `conflict`/`overwrite` line for the path, and no
+auto-commit fires.
