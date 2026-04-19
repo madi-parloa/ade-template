@@ -39,10 +39,13 @@ uvx copier update --trust --skip-answered
 1. Merges template/docs changes (AGENTS.md, `.planning/codebase/*`, rendered Cursor workspace, etc.) via 3-way diff.
 2. Clones any repos newly added to `ade-repos.txt`. Already-cloned repos are **not** `git pull`'d — safe even if you have WIP on feature branches.
 3. Refreshes GSD (`npx -y get-shit-done-cc@latest --local --cursor`).
+4. Auto-commits its own output as `chore: copier update to <new_commit>` so the working tree is clean when the command returns (see D-018).
+
+**One-command-forever promise (v0.8.4+):** `uvx copier update --trust --skip-answered` requires no pre-work and no post-work. It won't prompt, it won't leave the tree dirty, and the next update is never blocked by a forgotten commit from this one. If copier's 3-way merge produces unresolved conflict markers in any file, the auto-commit is aborted with a loud message and the tree is left dirty for you to resolve — same as pre-v0.8.4 behavior, no regression in the conflict case.
 
 `--skip-answered` suppresses re-prompting for answers already stored in `.copier-answers.yml` (see D-017). Drop it if you want to re-answer questions — typically only needed when adding an optional agentic-stack integration (`include_code_graph_mcp`, etc.), for which `agentic-stack.md` has its own documented command.
 
-As of **v0.8.3**, portfolio sync and GSD install run **once per update** in the real destination. Prior versions re-ran them three times per update due to copier's three-way-merge render algorithm — see `docs/DECISIONS.md` D-015 for the pwd gate that fixes this and D-007 / D-009 for the historical context.
+As of **v0.8.3**, portfolio sync and GSD install run **once per update** in the real destination (prior versions re-ran them three times — see D-015). As of **v0.8.4**, the update auto-commits when done (D-018), so consecutive `copier update` invocations work without any manual `git commit` between them.
 
 **Pulling existing clones** — if you want to update all already-cloned repos (not just add new ones), run this one-liner yourself. It's deliberately not automatic because `git pull` over a user's WIP is unsafe:
 

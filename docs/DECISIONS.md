@@ -256,3 +256,63 @@ The user originally tried `--skip-answers` (plural) and got `Error: Unknown swit
 **Where `--skip-answered` should NOT be used:** The `agentic-stack.md` "Changing your choices" block specifically exists for the case "I want to enable a code-graph MCP now, so I need to re-answer `include_code_graph_mcp`". Adding `--skip-answered` there would silently keep the old answer and confuse the user. Left as `--trust` only.
 
 **Trade-off:** None that we can see. `--skip-answered` is strictly better for the routine-update case and orthogonal to the new-question-added case.
+
+## D-018: `copier update` auto-commits its own changes (one-command-forever update)
+
+**Decision:** A final `_task` in `copier.yml`, gated to `_copier_operation == 'update'` and pwd-gated like the other update tasks, runs `git add -A && git commit -m "chore: copier update to <new_commit>"` at the end of every successful `copier update`. If the 3-way merge left unresolved conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`) in any modified file, the auto-commit is aborted with a loud message and the tree is left dirty for the user to resolve manually. If nothing changed (the update was a no-op), the task exits silently with `==> [auto-commit] nothing to commit`.
+
+**Context — what problem this solves:** From v0.8.3 onward, `copier update` renders its changes into the working tree and exits, leaving a dirty tree for the user to review and commit. This is copier's designed-in behavior — it cannot safely auto-commit because a 3-way merge may produce conflicts that a human must resolve. The consequence in practice:
+
+1. User runs `uvx copier update --trust --skip-answered`.
+2. Three files show as `M` in `git status`.
+3. User forgets to `git commit` (or defers it "until after reviewing").
+4. Days later, user runs `uvx copier update --trust --skip-answered` again → copier refuses with "Destination repository is dirty; cannot continue".
+5. User has to figure out what the old dirty files were, commit them, then re-run update.
+
+This broke the stated promise of the `Updating` section in the generated `README.md` ("Single entry point. Pulls template/docs changes…") because the single entry point, in practice, sometimes required a second manual step that wasn't documented.
+
+**Why auto-commit is safe here (even though copier itself refuses to do it generically):**
+
+Copier refuses to auto-commit because the general case includes:
+- Unrelated WIP in the working tree at update time.
+- 3-way merge conflicts that a human must resolve.
+- Projects with commit hooks, signing requirements, or review rules that prohibit automated commits.
+
+Each of those is addressed:
+- **Unrelated WIP:** copier already refuses updates on a dirty working tree. At the moment our auto-commit task runs, every dirty path in the destination is copier-managed by definition (either a rendered template file or `.copier-answers.yml` itself). `git add -A` is therefore safe in scope. If the user wants to keep WIP separate, they should be committing or stashing it before the update, which is already required.
+- **Merge conflicts:** the task scans every modified file for `^(<{7}|={7}|>{7})( |$)` markers (the three canonical git conflict markers as whole-line starts) and aborts auto-commit if any are found. The message directs the user to resolve and commit manually, which matches the pre-v0.8.4 behavior exactly. Zero regression when conflicts happen.
+- **Commit hooks / GPG signing:** the task does NOT pass `--no-verify` or `--no-gpg-sign`. If the user's gitconfig requires signing or runs pre-commit hooks, those run. If they fail, the commit fails, the tree is left dirty, and the user gets the hook/gpg error — again, same as pre-v0.8.4. No regression; we respect user git policy.
+
+**Why a separate `_task`, not wrapping `copier update` in a shell script:**
+
+- The docs have always pointed users at `uvx copier update --trust --skip-answered` as the single entry point. A wrapper script (say, `./update.sh`) would either require users to learn a new invocation or create a second, inconsistent entry point. Keeping the behavior inside `copier.yml` means the existing `uvx copier update --trust --skip-answered` command keeps working unchanged, and the auto-commit is transparent.
+- Tasks in `copier.yml` are versioned with the template. A wrapper script at the ADE root would be versioned with the ADE's own history and could drift from what the template expects.
+- The `when: "{{ _copier_operation == 'update' }}"` clause makes scaffold vs. update behavior precisely expressible in one file.
+
+**Why `_copier_operation == 'update'` and not `!= 'copy'`:**
+
+Copier's documented operations are `copy` and `update`. Using an equality check is more defensive than a not-equals check in case copier adds a new operation in a future major version. A hypothetical `bootstrap` operation shouldn't auto-commit.
+
+**Why use `git add -A` and not a curated file list:**
+
+Copier does not expose "the set of files copier just wrote" in a way `_tasks` can consume. The only reliable signal that a path is copier-managed is "it's dirty and we got here, and copier refused to run on a dirty tree". `git add -A` captures that cleanly. A curated list would drift from `template/` over time (every new template file would need manual maintenance) and would fail silently when drift happened.
+
+**Commit message format:** `chore: copier update to <new_commit_tag>`, e.g. `chore: copier update to v0.8.4`. Matches the convention the user was already using manually (confirmed in the v0.8.2→v0.8.3 cycle log: `chore: copier update v0.8.2 -> v0.8.3` was typed manually — the auto-commit format is the same concept). Uses `chore:` prefix so it sorts alongside other maintenance commits in conventional-commit tooling.
+
+**Trade-offs:**
+
+1. **Loss of per-file review opportunity.** Previously, the user could `git diff` the modified files after update and reject the whole update by `git checkout -- .` before committing. Now the update is committed immediately. Mitigation: `git revert HEAD` or `git reset HEAD^` is a one-liner if the user decides they don't want the update after all. The auto-commit is atomic and isolated, so reverting is clean.
+2. **Commit-hook-heavy projects may see surprising hook runs during update.** If an ADE's repo has a pre-commit hook that takes 30 seconds to run, `copier update` now includes that cost. Acceptable — the hooks exist for a reason, and running them on copier-managed commits is consistent with running them on any other commit.
+3. **First update from v0.8.3 (no auto-commit task) to v0.8.4 (with auto-commit task) still gets auto-committed.** The destination render uses the NEW template, which has the task. So v0.8.3 → v0.8.4 is self-committing. No awkward transition.
+4. **The task still runs GSD install on a no-op update** (where `_commit` matches and nothing rendered differently). The GSD install is idempotent and cheap on subsequent runs, so this is accepted — a finer gate ("only run GSD if version bumped") is a possible future optimization but out of scope here. The auto-commit correctly detects nothing-to-commit in this case and does not produce a commit.
+
+**What this replaces / relates to:**
+
+- D-007 and D-009 describe the `_tasks` evolution for portfolio sync and GSD install. Auto-commit joins that family as a fourth update-phase task with its own gate (`when: update` + pwd).
+- D-015 (pwd gate to run tasks once) is a direct prerequisite — without it, auto-commit would run in the old_copy and new_copy temp render dirs as well, polluting a non-destination directory's git state. The `when: update` clause plus the pwd gate together mean auto-commit runs exactly once per real update invocation.
+- D-017 (`--skip-answered`) removes prompt friction; D-018 removes commit friction. Together they realize the "single entry point" promise of the generated README.
+
+**Validation:** `test.sh` now asserts the full lifecycle:
+- After `copier copy`: exactly one commit (`ADE scaffold`), clean tree.
+- After `copier update v0.0.0 → v0.0.1` on a content-changing bump: exactly two commits (`ADE scaffold`, then `chore: copier update to v0.0.1`), clean tree.
+- After a second `copier update` at v0.0.1 (no-op): still two commits, clean tree, auto-commit correctly emits `nothing to commit`.

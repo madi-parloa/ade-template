@@ -110,10 +110,80 @@ print(f"  ok: {len(folders)} folders, managed settings correct")
 PY
 
 echo ""
-echo "==> Running copier update (no-op; exercises the double-render path)..."
+echo "==> Verifying copier copy created exactly one 'ADE scaffold' commit (D-018 baseline)..."
+cd "$TEST_ADE"
+[ -d .git ] || { echo "FAIL: .git missing in $TEST_ADE" >&2; exit 1; }
+commit_count="$(git rev-list --count HEAD)"
+if [ "$commit_count" -ne 1 ]; then
+  echo "FAIL: expected 1 commit after copy, got $commit_count" >&2
+  git log --oneline >&2
+  exit 1
+fi
+latest_msg="$(git log -1 --pretty=%s)"
+if [ "$latest_msg" != "ADE scaffold" ]; then
+  echo "FAIL: expected 'ADE scaffold' commit, got '$latest_msg'" >&2
+  exit 1
+fi
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  echo "FAIL: tree dirty immediately after copy" >&2
+  git status --short >&2
+  exit 1
+fi
+echo "  ok: 1 'ADE scaffold' commit, clean tree"
+
+echo ""
+echo "==> Bumping template to v0.0.1 (forces content delta on next update)..."
+(
+  cd "$TEMPLATE_COPY"
+  # Harmless append to a rendered file so the ADE's README.md changes on update.
+  printf '\n<!-- template bump v0.0.1 -->\n' >> template/README.md.jinja
+  git -c user.email=test@test -c user.name=test commit -aq -m "bump" --no-gpg-sign
+  git tag v0.0.1
+) >/dev/null
+
+echo ""
+echo "==> Running copier update v0.0.0 -> v0.0.1 (must auto-commit per D-018)..."
 cd "$TEST_ADE"
 uvx copier update --trust --defaults
 [ -f "$WS" ] || { echo "FAIL: workspace file missing after update" >&2; exit 1; }
+
+echo "==> Verifying auto-commit fired and tree is clean..."
+commit_count="$(git rev-list --count HEAD)"
+if [ "$commit_count" -ne 2 ]; then
+  echo "FAIL: expected 2 commits after update (scaffold + auto-commit), got $commit_count" >&2
+  git log --oneline >&2
+  exit 1
+fi
+latest_msg="$(git log -1 --pretty=%s)"
+expected_msg="chore: copier update to v0.0.1"
+if [ "$latest_msg" != "$expected_msg" ]; then
+  echo "FAIL: expected commit message '$expected_msg', got '$latest_msg'" >&2
+  git log --oneline >&2
+  exit 1
+fi
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  echo "FAIL: tree dirty after auto-commit — auto-commit is broken" >&2
+  git status --short >&2
+  exit 1
+fi
+echo "  ok: auto-commit landed ('$expected_msg'), tree clean"
+
+echo ""
+echo "==> Running copier update again at v0.0.1 (must be a no-op; no new commit)..."
+uvx copier update --trust --defaults
+commit_count_after="$(git rev-list --count HEAD)"
+if [ "$commit_count_after" -ne 2 ]; then
+  echo "FAIL: no-op update created a new commit (idempotency broken): $commit_count_after" >&2
+  git log --oneline >&2
+  exit 1
+fi
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  echo "FAIL: tree dirty after no-op update" >&2
+  git status --short >&2
+  exit 1
+fi
+echo "  ok: no-op update created 0 new commits, tree clean"
+
 python3 -c "
 import json
 with open('$WS') as f:

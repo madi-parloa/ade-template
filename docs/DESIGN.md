@@ -52,26 +52,30 @@ The repo root holds `copier.yml` and `README.md` (copier config + landing page).
 
 `copier update` requires the destination to be a git repo (hard requirement — the source code raises `UserMessageError("Updating is only supported in git-tracked subprojects.")`). This is a local `.git/` only — no remote, no push.
 
-Guard rule for `_tasks`: two orthogonal gating mechanisms, combined per task.
+Guard rule for `_tasks`: three orthogonal gating mechanisms, combined per task.
 
 1. **`when: "{{ _copier_operation == 'copy' }}"`** — restricts a task to first-scaffold only. Used for tasks that would fail or be user-hostile on `copier update` (`git init` would find no `.git/`; Cursor launch would re-launch on every template bump).
-2. **`case "$PWD" in */copier._main.*) exit 0 ;; esac`** at the top of the task body — skips copier's internal temp render dirs (the `old_copy` and `new_copy` passes of its three-way merge), leaving only the destination pass. Used for tasks that must run on `copier update` but should run **exactly once per update**, not three times. See D-015.
+2. **`when: "{{ _copier_operation == 'update' }}"`** — restricts a task to update only. Used for the auto-commit task (D-018), which would fire redundantly on copy where a dedicated `ADE scaffold` commit already runs.
+3. **`case "$PWD" in */copier._main.*) exit 0 ;; esac`** at the top of the task body — skips copier's internal temp render dirs (the `old_copy` and `new_copy` passes of its three-way merge), leaving only the destination pass. Used for tasks that must run on `copier update` but should run **exactly once per update**, not three times. See D-015.
 
-Current policy per task:
+Current policy per task (order matches `copier.yml`):
 
-| Task | `when: copy`? | pwd gate? | Runs on `copier update`? |
-|---|---|---|---|
-| Copy `portfolio_file` → `ade-repos.txt` (if provided) | no | yes | yes — once in destination |
-| Portfolio sync — **clone-if-missing** loop | no | yes | yes — once in destination (new repos cloned; existing repos untouched) |
-| GSD install — `npx -y get-shit-done-cc@latest --local --cursor` | no | yes | yes — once in destination (tracks `@latest`) |
-| `git init && git add -A && git commit` | **yes** | n/a | no |
-| Cursor launch | **yes** | n/a | no |
+| Task | `when` | pwd gate? | Runs on copy | Runs on update |
+|---|---|---|---|---|
+| Copy `portfolio_file` → `ade-repos.txt` (if provided) | none | yes | yes | yes — once in destination |
+| Portfolio sync — **clone-if-missing** loop | none | yes | yes | yes — once in destination (new repos cloned; existing repos untouched) |
+| GSD install — `npx -y get-shit-done-cc@latest --local --cursor` | none | yes | yes | yes — once in destination (tracks `@latest`) |
+| `git init && git add -A && git commit -m 'ADE scaffold'` | `copy` | n/a | yes | no |
+| Cursor launch (`cursor --new-window`) | `copy` | n/a | yes | no |
+| Auto-commit `chore: copier update to <new_commit>` | `update` | yes | no | yes — once in destination (D-018) |
 
 The sync loop never `git pull`s existing repos. `copier update` bringing in a new `ade-repos.txt` entry results in one `git clone`; already-cloned repos are left alone so that user WIP branches are never stomped. Users who want to pull everything run the one-liner documented in the scaffolded `README.md`.
 
 Kitchen installers (`claudes-kitchen`, `open-kitchen`) are deliberately skipped; see D-013.
 
-The evolution of this policy — v0.7.0 unguarded-with-pull, v0.7.1 guarded-to-copy-only, v0.7.2 unguarded-clone-if-missing under accepted 3× execution, v0.8.3 pwd-gated for 1× execution — is documented in D-007, D-009, and D-015. The copier double-render behavior that makes the pwd gate necessary is explained in D-009 and D-015.
+**One-command-forever update contract (v0.8.4+):** `uvx copier update --trust --skip-answered` is designed to be a true single entry point — no pre-commit of previous updates, no prompts, no post-commit. The auto-commit task at the end of the update chain ensures the working tree is clean after every successful update, so the next update has no dirty-tree blocker. If copier's 3-way merge produces unresolved conflict markers, the auto-commit aborts loudly and the tree is left dirty for manual resolution — same failure mode as pre-v0.8.4. See D-018 for the full safety analysis.
+
+The evolution of this policy — v0.7.0 unguarded-with-pull, v0.7.1 guarded-to-copy-only, v0.7.2 unguarded-clone-if-missing under accepted 3× execution, v0.8.3 pwd-gated for 1× execution, v0.8.4 add auto-commit-on-update — is documented in D-007, D-009, D-015, and D-018. The copier double-render behavior that makes the pwd gate necessary is explained in D-009 and D-015.
 
 ### 5. Portfolio as a copier input with file override
 
