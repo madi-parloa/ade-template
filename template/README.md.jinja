@@ -22,7 +22,7 @@ uvx copier copy --trust git+https://github.com/madi-parloa/ade-template.git <thi
 ## Updating
 
 ```bash
-uvx copier update --trust
+uvx copier update --trust --skip-answered
 ```
 
 Single entry point. Pulls template/docs changes (AGENTS.md guidance, `.planning/codebase/*` intel, refreshed workspace file) AND:
@@ -40,7 +40,7 @@ for d in */; do [ -d "$d/.git" ] && git -C "$d" pull --ff-only; done
 
 ## Producing a different ADE
 
-1. **Different repos** — re-run copier with `--data portfolio_file=/path/to/my-repos.txt`, or edit `ade-repos.txt` and run `uvx copier update --trust` to clone any newly listed entries.
+1. **Different repos** — re-run copier with `--data portfolio_file=/path/to/my-repos.txt`, or edit `ade-repos.txt` and run `uvx copier update --trust --skip-answered` to clone any newly listed entries.
 2. **Fork the template** — `gh repo fork madi-parloa/ade-template --remote` and scaffold from your fork.
 
 ## Files

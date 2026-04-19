@@ -191,3 +191,68 @@ This had two failure modes:
 **Trade-off:** If someone genuinely wanted to track a cloned repo's working copy (e.g., ship it as part of the scaffolded project), they'd need to add an explicit `!/name/` allowlist. No current use case needs this, and doing so would be conceptually wrong — portfolio repos are external dependencies, not scaffolded content.
 
 **Gitlink cleanup for existing ADEs:** ADEs scaffolded before v0.7.2 already have nested repos tracked as gitlinks in their `.git/index`. After `copier update` brings in the new `.gitignore`, run `git rm --cached -r <repo-name>` (without `-f`) to drop each stale pointer; the working tree is untouched. The new `.gitignore` then keeps them out on every future `git add`.
+
+## D-015: Skip `_tasks` in copier's temp render dirs (supersedes the "3× execution accepted" stance in D-007 / D-009)
+
+**Decision:** The portfolio-sync task, the GSD install task, and the `cp portfolio_file` task each guard their own body with a `case "$PWD" in */copier._main.*) exit 0 ;; esac` check at the top. On `copier update`, this causes those tasks to **no-op** in copier's internal render temp directories (`/private/var/folders/.../copier._main.old_copy.*` and `.../copier._main.new_copy.*`) and run **only once**, in the real destination.
+
+**Context — how we got here:** D-007 and D-009 accepted that `_tasks` fires three times per `copier update` because copier's update algorithm re-renders the template at the old baseline and the new target for its three-way merge. The earlier conclusion was "make every unguarded task idempotent and cheap under 3× execution." For the portfolio sync that was fine (after the clone-if-missing rewrite in v0.7.2, 3× = 1 real clone + 2 `[ -d ]` skips). For the GSD install it was the acknowledged cost — 3× `npx -y get-shit-done-cc@latest --local --cursor`, which is one npm registry round-trip plus a re-install of ~79 skills each time.
+
+In practice the GSD install cost was not cheap: each invocation prints its full banner, refetches the npm manifest, and rewrites `.cursor/`. On a realistic `copier update` this meant three back-to-back GSD banners in the log and ~5–10 seconds of redundant work per invocation. The "accepted cost" story also made reading `copier update` output confusing — the user sees cloning output twice and GSD install output three times, which reads like a bug even though it was correctly documented as a feature.
+
+The pwd gate eliminates both cost and confusion. After v0.8.3, a clean `copier update` on an already-synced ADE produces: two `==> [skip]` lines for the old_copy render, the real sync/install output for the destination, and two more `==> [skip]` lines for the new_copy render.
+
+**Why a pwd check, not some other gate:**
+
+- **Checking `_copier_operation`** — copier exposes this Jinja variable (`copy` vs `update`), but all three renders on update set it identically. It does not distinguish the temp renders from the real destination.
+- **Checking for `.git/` in `$PWD`** — the real destination has `.git/` (either pre-existing or created by task 4 on copy). Temp render dirs do not. BUT: on `copier copy`, task 2 (sync) and task 3 (GSD install) run **before** task 4 (`git init`), so at that moment the real destination also has no `.git/`. Using `.git/` as the gate would false-skip every fresh scaffold. Rejected.
+- **Checking `_copier_conf.answers_file`** — copier renders `.copier-answers.yml` in every render, including temp dirs. Not a discriminator.
+- **Sentinel file / lockfile** — works, but requires a cleanup step on success and opens the question "what if the cleanup is missed, does the ADE become stuck?" More moving parts than the pwd match.
+- **Moving expensive work to `_migrations`** — `_migrations` fire only on update, not copy. Would require duplicating the bash across `_tasks` (for copy) and `_migrations` (for update). Worse DRY.
+- **Waiting for a copier upstream fix** — no issue filed; copier's current behavior is defensible (tasks ARE part of the template, and the diff renders ARE template renders). Unknown timeline.
+
+**Why the pwd check is correct:** On `copier copy`, there are no temp render dirs — copier renders straight into the destination. The gate's `case` never matches, every task runs once. On `copier update`, copier always names its temp dirs with `copier._main.<phase>_copy.<random>` where `<phase>` is `old` or `new`. The gate matches both and skips. Empirically validated with an instrumented template: copy produced `clone=1 gsd=1 git-init=1`; update produced `clone=1 gsd=1 git-init=0` plus visible `==> [skip]` messages for both temp renders.
+
+**Risks:**
+
+1. **Copier renames its temp dirs in a future version** (e.g., `copier._main.*` → `copier._render.*`). The gate would silently stop matching and updates would regress to 3× execution. Correct but wasteful — same shape as pre-v0.8.3 behavior. Mitigation: a comment in `copier.yml` points at this decision; `test.sh` exercises `copier update` end-to-end so any regression in temp-dir naming would surface as more-than-expected sync output in test logs.
+2. **A user's real destination path happens to contain the literal substring `copier._main.`.** Theoretically a false positive. Practically unreachable — that string doesn't occur in natural directory names.
+
+**One-time migration cost:** The very first `copier update` from v0.8.2 (no gate) to v0.8.3 (with gate) still does 2× execution instead of 3×. Copier's three-way merge renders the **old baseline** using the old template code, and v0.8.2's `_tasks` have no gate — so the old_copy temp render still does a full sync + GSD install that gets thrown away. The new_copy render uses v0.8.3's gate and correctly skips. From v0.8.3 onward, every update is fully clean. Retroactively fixing v0.8.2 is not possible (the tag is immutable and multiple ADEs in the wild point to it).
+
+**What this replaces:**
+
+- D-007's narrative that `v0.7.2+` "accepts 1 clone + 2 skips per new repo" under 3× execution is still factually accurate for v0.7.2 – v0.8.2 but is **no longer the policy from v0.8.3 onward**. Update is 1× execution in the destination.
+- D-009's table of "Which tasks are guarded, and why" stays correct for the `when: copy` guards on `git init` and Cursor launch. The three `_copier_operation`-unguarded rows (`cp portfolio_file`, portfolio sync, GSD install) are now additionally `PWD`-gated via this decision. See `copier.yml` for the authoritative current state.
+
+**Related changes in the same v0.8.3 release:**
+
+- D-016 documents the switch to alphabetical-with-root-first ordering in the generated Cursor workspace file.
+- D-017 documents the switch to `--skip-answered` in the `README.md` update instructions.
+
+## D-016: Workspace file: root first, repos alphabetical
+
+**Decision:** In the generated `<ade_name>.code-workspace`, the ADE root folder is the first entry, and portfolio repos are sorted case-insensitive alphabetically. Previously, portfolio repos appeared first in the order they were declared in `ade-repos.txt` (grouped by section: "Parloa infra core", "Stamps and Deployment Units", etc.) and the root appeared last.
+
+**Context:** The user reported that finding a specific repo in the Cursor sidebar required scanning a non-obvious order that matched `ade-repos.txt`'s editorial grouping rather than the alphabet. With 15+ repos in the Parloa portfolio this was friction. Moving root to the top also makes workspace-level files (`AGENTS.md`, `README.md`, `.planning/`, `.copier-answers.yml`) the first thing the user sees when they open the workspace — which aligns with the "root contains orientation, subdirs contain the work" mental model baked into `AGENTS.md`.
+
+**Implementation:** The Jinja template pipes `repo_names` through `| sort(case_sensitive=false)` and emits the root folder outside the loop, before the sorted entries. A `{% if sorted_names %},{% endif %}` guard handles the edge case of an empty `ade-repos.txt`.
+
+**Trade-offs:**
+
+- The section grouping in `ade-repos.txt` (`# Parloa infra core`, `# Stamps and Deployment Units`, ...) no longer propagates to the workspace view. That grouping is still meaningful for humans reading the portfolio file, just not rendered in the sidebar.
+- Alphabetical ordering means `ade-template` (the template's own clone) is the first folder after root. Acceptable — consistent with the alphabetical rule and easy to find.
+
+## D-017: Use `--skip-answered` in documented `copier update` invocations (where appropriate)
+
+**Decision:** The scaffolded `README.md` documents `uvx copier update --trust --skip-answered` (not `--trust` alone) in the routine "Updating" and "Different repos" sections. The `agentic-stack.md` "Changing your choices" section intentionally does NOT use `--skip-answered` — that section is explicitly about re-answering questions, and skipping them would defeat the purpose.
+
+**Context:** Without `--skip-answered`, every `copier update` re-prompts for the answers already stored in `.copier-answers.yml` (`ade_name`, `description`, `portfolio_file`, and four optional-integration toggles). The user has to press Enter seven times to accept the defaults, or think about each prompt again if they're in a hurry. For a command that's supposed to be routine — "just refresh my ADE" — seven prompts are friction.
+
+The `--skip-answered` flag (copier 9.x, documented in `uvx copier update --help`) suppresses prompts for questions that already have stored answers. New questions (e.g., if a future template version adds `include_xyz`) still prompt — which is the correct behavior.
+
+The user originally tried `--skip-answers` (plural) and got `Error: Unknown switch --skip-answers`. The correct flag is `--skip-answered`.
+
+**Where `--skip-answered` should NOT be used:** The `agentic-stack.md` "Changing your choices" block specifically exists for the case "I want to enable a code-graph MCP now, so I need to re-answer `include_code_graph_mcp`". Adding `--skip-answered` there would silently keep the old answer and confuse the user. Left as `--trust` only.
+
+**Trade-off:** None that we can see. `--skip-answered` is strictly better for the routine-update case and orthogonal to the new-question-added case.

@@ -52,21 +52,26 @@ The repo root holds `copier.yml` and `README.md` (copier config + landing page).
 
 `copier update` requires the destination to be a git repo (hard requirement — the source code raises `UserMessageError("Updating is only supported in git-tracked subprojects.")`). This is a local `.git/` only — no remote, no push.
 
-Guard rule for `_tasks`: guard destructive or one-shot tasks; leave idempotent tasks unguarded so template evolution propagates on `copier update`:
+Guard rule for `_tasks`: two orthogonal gating mechanisms, combined per task.
 
-| Task | Guarded to `copy` only? | Runs on `copier update`? |
-|---|---|---|
-| Copy `portfolio_file` → `ade-repos.txt` (if provided) | no | yes (trivial, no-op when unset) |
-| Portfolio sync — **clone-if-missing** loop | no | yes (new repos land; existing repos untouched) |
-| GSD install — `npx -y get-shit-done-cc@latest --local --cursor` | no | yes (tracks `@latest`) |
-| `git init && git add -A && git commit` | **yes** | no (no `.git/` in copier's temp dirs) |
-| Cursor launch | **yes** | no (otherwise Cursor relaunches on every update) |
+1. **`when: "{{ _copier_operation == 'copy' }}"`** — restricts a task to first-scaffold only. Used for tasks that would fail or be user-hostile on `copier update` (`git init` would find no `.git/`; Cursor launch would re-launch on every template bump).
+2. **`case "$PWD" in */copier._main.*) exit 0 ;; esac`** at the top of the task body — skips copier's internal temp render dirs (the `old_copy` and `new_copy` passes of its three-way merge), leaving only the destination pass. Used for tasks that must run on `copier update` but should run **exactly once per update**, not three times. See D-015.
+
+Current policy per task:
+
+| Task | `when: copy`? | pwd gate? | Runs on `copier update`? |
+|---|---|---|---|
+| Copy `portfolio_file` → `ade-repos.txt` (if provided) | no | yes | yes — once in destination |
+| Portfolio sync — **clone-if-missing** loop | no | yes | yes — once in destination (new repos cloned; existing repos untouched) |
+| GSD install — `npx -y get-shit-done-cc@latest --local --cursor` | no | yes | yes — once in destination (tracks `@latest`) |
+| `git init && git add -A && git commit` | **yes** | n/a | no |
+| Cursor launch | **yes** | n/a | no |
 
 The sync loop never `git pull`s existing repos. `copier update` bringing in a new `ade-repos.txt` entry results in one `git clone`; already-cloned repos are left alone so that user WIP branches are never stomped. Users who want to pull everything run the one-liner documented in the scaffolded `README.md`.
 
 Kitchen installers (`claudes-kitchen`, `open-kitchen`) are deliberately skipped; see D-013.
 
-The three versions of this policy (v0.7.0 unguarded-with-pull, v0.7.1 guarded-to-copy-only, v0.7.2 unguarded-clone-if-missing) and the copier double-render behavior that constrains them are documented in D-007 and D-009.
+The evolution of this policy — v0.7.0 unguarded-with-pull, v0.7.1 guarded-to-copy-only, v0.7.2 unguarded-clone-if-missing under accepted 3× execution, v0.8.3 pwd-gated for 1× execution — is documented in D-007, D-009, and D-015. The copier double-render behavior that makes the pwd gate necessary is explained in D-009 and D-015.
 
 ### 5. Portfolio as a copier input with file override
 
@@ -89,7 +94,7 @@ The seven GSD codebase intel files (`ARCHITECTURE.md`, `STACK.md`, `STRUCTURE.md
 ### 7. ade-repos.txt stays in the output
 
 Early iterations tried to hide this file (render → run → delete). Kept because:
-- Users edit `ade-repos.txt` to tweak the portfolio (and re-running `copier update --trust` re-renders the Cursor workspace file and triggers `clone-if-missing` for any new entries).
+- Users edit `ade-repos.txt` to tweak the portfolio (and re-running `uvx copier update --trust --skip-answered` re-renders the Cursor workspace file — sorted alphabetically with the ADE root at top, per D-016 — and triggers `clone-if-missing` for any new entries).
 - The `ade-` prefix makes its purpose clear in the directory listing.
 - Copier manages it across template updates.
 
@@ -127,32 +132,48 @@ _min_copier_version: "9.0.0"
 _subdirectory: template           # template content lives under template/
 
 _tasks:
-  # 1. Override ade-repos.txt if user provided a custom file (no-op when unset)
-  - >-
-    {% if portfolio_file %}cp "{{ portfolio_file }}" ade-repos.txt{% endif %}
+  # 1. Override ade-repos.txt if user provided a custom file (no-op when unset).
+  #    pwd-gated against copier temp renders (see D-015).
+  - command:
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        case "$PWD" in
+          */copier._main.*) echo "==> [skip] copier temp render dir" >&2; exit 0 ;;
+        esac
+        {% if portfolio_file %}cp "{{ portfolio_file }}" ade-repos.txt{% endif %}
   # 2. Portfolio sync: clone missing repos; existing repos are never touched.
-  #    Unguarded so new entries in ade-repos.txt propagate on copier update.
+  #    Propagates new ade-repos.txt entries on copier update.
   #    Kitchen installers are deliberately skipped; see D-013.
   - command:
       - bash
       - -c
       - |
+        set -euo pipefail
+        case "$PWD" in
+          */copier._main.*) echo "==> [skip] copier temp render dir" >&2; exit 0 ;;
+        esac
         # ...clone-if-missing loop reading ade-repos.txt...
-  # 3. GSD workspace-local install; unguarded so @latest tracks template evolution.
+  # 3. GSD workspace-local install; tracks @latest so template evolution lands on update.
   - command:
       - bash
       - -c
       - |
+        set -euo pipefail
+        case "$PWD" in
+          */copier._main.*) echo "==> [skip] copier temp render dir" >&2; exit 0 ;;
+        esac
         npx -y get-shit-done-cc@latest --local --cursor
   # 4. Init git for copier update support (first scaffold only; no .git/ in copier temp dirs)
   - command: "git init && git add -A && git commit -m 'ADE scaffold'"
     when: "{{ _copier_operation == 'copy' }}"
   # 5. Open Cursor (first scaffold only; otherwise Cursor relaunches on every update)
-  - command: "open -a Cursor '{{ ade_name }}.code-workspace'"
+  - command: "cursor --new-window '{{ ade_name }}.code-workspace'"
     when: "{{ _copier_operation == 'copy' }}"
 ```
 
-Copier's update algorithm re-executes `_tasks` three times per update (old-baseline temp render, new-target temp render, and real project — the double-render path; see D-009). This is the central constraint. The sync loop is written as **clone-if-missing** so 3× execution is idempotent — one clone on the first iteration, two `[ -d "$dir" ]` skips on the other two. GSD install runs 3× and accepts the cost (3× npm registry check) as the price of tracking `@latest`. `git init` and Cursor launch are guarded to copy-only because running them on update would fail (no `.git/` in copier temp dirs) or be user-hostile (re-launching Cursor on every template bump).
+Copier's update algorithm re-executes `_tasks` three times per update (old-baseline temp render, new-target temp render, and real project — the double-render path; see D-009). Without the pwd gate, tasks 1–3 would run 3× on every update — wasteful enough to matter for GSD install (which refetches the npm manifest and rewrites `.cursor/` each time) and noisy in the log even when the sync loop is idempotent. The pwd gate (D-015) inspects `$PWD` at the top of each task body and bails out with `exit 0` when the working directory matches copier's temp-dir naming convention (`copier._main.old_copy.*` and `copier._main.new_copy.*`). Result: tasks 1–3 run **exactly once per `copier update`**, in the real destination. Tasks 4 and 5 stay guarded to `copy` only for the independent reasons in the table above (no `.git/` in temp dirs; no point in re-launching Cursor on every template bump).
 
 ## Known limitations (v1)
 

@@ -22,7 +22,7 @@ Copier prompts for a name and description, renders the template, clones all repo
 | `README.md` | Human orientation |
 | `agentic-stack.md` | Declared defaults + opt-in MCP integrations for this ADE, with the exact `agent-guardrails/install.sh --with=...` command to activate them |
 | `ade-repos.txt` | Git URLs of repos to clone |
-| `<ade_name>.code-workspace` | Multi-root Cursor workspace listing every portfolio repo. Rendered by Copier from `ade-repos.txt` on `copier copy` / `copier update`; opened automatically on first scaffold only. Re-render after editing `ade-repos.txt` with `uvx copier update --trust --force` |
+| `<ade_name>.code-workspace` | Multi-root Cursor workspace listing every portfolio repo, with the ADE root at the top and portfolio repos sorted alphabetically (see D-016). Rendered by Copier from `ade-repos.txt` on `copier copy` / `copier update`; opened automatically on first scaffold only. Re-render after editing `ade-repos.txt` with `uvx copier update --trust --skip-answered` |
 | `.planning/PROJECT.md` | GSD project definition |
 | `.planning/codebase/*.md` | Pre-seeded codebase intelligence (7 files) |
 | `.cursor/` | Workspace-local Cursor config (populated by install) |
@@ -31,7 +31,7 @@ Copier prompts for a name and description, renders the template, clones all repo
 
 ```bash
 cd ~/path/to/my-ade
-uvx copier update --trust
+uvx copier update --trust --skip-answered
 ```
 
 `copier update` is the single entry point. It:
@@ -40,7 +40,9 @@ uvx copier update --trust
 2. Clones any repos newly added to `ade-repos.txt`. Already-cloned repos are **not** `git pull`'d — safe even if you have WIP on feature branches.
 3. Refreshes GSD (`npx -y get-shit-done-cc@latest --local --cursor`).
 
-See `docs/DECISIONS.md` D-007 / D-009 for the `_tasks` policy history and the copier double-render behavior that shapes it.
+`--skip-answered` suppresses re-prompting for answers already stored in `.copier-answers.yml` (see D-017). Drop it if you want to re-answer questions — typically only needed when adding an optional agentic-stack integration (`include_code_graph_mcp`, etc.), for which `agentic-stack.md` has its own documented command.
+
+As of **v0.8.3**, portfolio sync and GSD install run **once per update** in the real destination. Prior versions re-ran them three times per update due to copier's three-way-merge render algorithm — see `docs/DECISIONS.md` D-015 for the pwd gate that fixes this and D-007 / D-009 for the historical context.
 
 **Pulling existing clones** — if you want to update all already-cloned repos (not just add new ones), run this one-liner yourself. It's deliberately not automatic because `git pull` over a user's WIP is unsafe:
 
@@ -50,7 +52,7 @@ for d in */; do [ -d "$d/.git" ] && git -C "$d" pull --ff-only; done
 
 ## Customizing
 
-1. **Different repos** — re-run copier with `--data portfolio_file=/path/to/my-repos.txt`, or edit `ade-repos.txt` and run `uvx copier update --trust` to clone any newly listed repos.
+1. **Different repos** — re-run copier with `--data portfolio_file=/path/to/my-repos.txt`, or edit `ade-repos.txt` and run `uvx copier update --trust --skip-answered` to clone any newly listed repos.
 2. **Optional agentic integrations** — Copier asks four questions that declare which `agent-guardrails` MCP extensions should be considered active for this ADE:
 
    | Question | Values | Default | Effect |
