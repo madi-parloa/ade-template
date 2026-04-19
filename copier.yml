@@ -221,11 +221,21 @@ include_cursor_self_hosted_agent:
   help: "Clone madi-parloa/cursor-self-hosted-agent?"
   default: true
 
+gsd_docs_handle:
+  type: str
+  help: "Your gsd-docs handle — the GitHub username that owns `users/<handle>/**` in
+    the shared gsd-docs repo. Used to render the template-owned sentinel region
+    in CLAUDE.md and AGENTS.md. Must match the value `gsd-docs/bin/onboard.sh`
+    detects (via `gh api user` or `gsd-docs/.gsd-docs-user`); mismatch causes a
+    one-time conflict on next recopy. See docs/DECISIONS.md D-025."
+  default: ""
+  when: "{{ include_gsd_docs }}"
+
 portfolio_groups:
   type: str
   multiselect: true
-  help: "Which Parloa repo groups to include? Each group expands to a fixed set
-    of repos — see docs/DECISIONS.md D-023."
+  help: "Which Parloa repo groups to include? Each group expands to a fixed set of
+    repos — see docs/DECISIONS.md D-023."
   choices:
     - core-infra
     - stamps

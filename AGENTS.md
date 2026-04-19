@@ -49,6 +49,10 @@ Short-name DSL (D-024): `some-repo` → `git@github.com:parloa/some-repo.git`; `
 
 Changing the portfolio post-scaffold: `uvx copier recopy --trust --overwrite` (without `--skip-answered`) re-prompts for `portfolio_groups` and `extra_repos`, using current answers as defaults.
 
+## gsd-docs sentinel region
+
+When `include_gsd_docs=true`, `template/CLAUDE.md.jinja` and `template/AGENTS.md.jinja` render a `<!-- GSD-DOCS:multi-repo-paths:BEGIN -->` … `<!-- GSD-DOCS:multi-repo-paths:END -->` block at the end of each file, with `{{ gsd_docs_handle }}` substituted into the ownership contract lines. This region is **template-owned**: `gsd-docs/bin/onboard.sh`'s `inject_sentinel` still runs as task 3, but since the block already matches what it would render, the rewrite is byte-identical and produces no diff. No more `conflict / overwrite` noise for these files on recopy. See D-025. The `gsd_docs_handle` answer must match the handle `onboard.sh` detects (via `gh api user` or `gsd-docs/.gsd-docs-user`); a mismatch makes the next recopy show one real conflict until the answer is corrected via `copier recopy` without `--skip-answered`.
+
 ## Working on this repo
 
 - Read `docs/DESIGN.md` before making changes — it explains why things are the way they are.

@@ -111,6 +111,7 @@ TEST_ADE="$SCRATCH/test-ade"
 echo "==> [1/6] Scaffolding with defaults (all toggles, all groups, empty extras)..."
 uvx copier copy --trust --defaults \
   --data ade_name=test-ade \
+  --data gsd_docs_handle=testuser \
   "$TEMPLATE_COPY" "$TEST_ADE"
 
 WS="$TEST_ADE/test-ade.code-workspace"
@@ -158,6 +159,32 @@ if ! grep -qF 'Generated from .copier-answers.yml' "$REPOS"; then
   exit 1
 fi
 echo "  ok: ade-repos.txt contains all 16 default URLs and the generated header"
+
+# D-025: when include_gsd_docs=true, the gsd-docs sentinel region must be
+# part of the template render (CLAUDE.md and AGENTS.md), so onboard.sh's
+# idempotent re-injection is byte-identical and copier sees 'identical' on
+# subsequent recopies (no conflict / overwrite noise). Handle substitution
+# must come from gsd_docs_handle, not the literal {{current_user}} placeholder.
+for f in CLAUDE.md AGENTS.md; do
+  target="$TEST_ADE/$f"
+  if ! grep -qF '<!-- GSD-DOCS:multi-repo-paths:BEGIN -->' "$target"; then
+    echo "FAIL: $f missing gsd-docs sentinel BEGIN marker (expected with include_gsd_docs=true)" >&2
+    exit 1
+  fi
+  if ! grep -qF '<!-- GSD-DOCS:multi-repo-paths:END -->' "$target"; then
+    echo "FAIL: $f missing gsd-docs sentinel END marker" >&2
+    exit 1
+  fi
+  if ! grep -qF 'You are `testuser`.' "$target"; then
+    echo "FAIL: $f did not substitute gsd_docs_handle into the ownership contract" >&2
+    exit 1
+  fi
+  if grep -qF '{{current_user}}' "$target"; then
+    echo "FAIL: $f leaked the literal {{current_user}} placeholder from the gsd-docs snippet" >&2
+    exit 1
+  fi
+done
+echo "  ok: CLAUDE.md and AGENTS.md render the gsd-docs sentinel region with gsd_docs_handle"
 
 # Workspace file: root first, 16 portfolio folders, sorted case-insensitive.
 python3 - "$WS" <<'PY'
@@ -236,7 +263,8 @@ PY
 ) >/dev/null
 
 cd "$TEST_ADE"
-uvx copier recopy --trust --skip-answered --overwrite --defaults
+uvx copier recopy --trust --skip-answered --overwrite --defaults \
+  --data gsd_docs_handle=testuser
 
 if ! grep -qxF "git@github.com:parloa/parloa-newthing.git" "$REPOS"; then
   echo "FAIL: recopy did not pick up parloa-newthing in ade-repos.txt" >&2
@@ -271,7 +299,17 @@ echo "  ok: recopy cloned parloa-newthing/, updated ade-repos.txt, auto-committe
 # ----------------------------------------------------------------------------
 echo ""
 echo "==> [3/6] Re-running recopy at the same version must be a no-op..."
-uvx copier recopy --trust --skip-answered --overwrite --defaults
+# Capture recopy stdout/stderr so we can assert that no template-owned file is
+# flagged 'conflict' or 'overwrite'. D-025: sentinel-bearing files (CLAUDE.md,
+# AGENTS.md) must render byte-identically to disk, not show as conflicts.
+recopy_out="$SCRATCH/recopy-noop.log"
+uvx copier recopy --trust --skip-answered --overwrite --defaults \
+  --data gsd_docs_handle=testuser 2>&1 | tee "$recopy_out"
+if grep -E '(conflict|overwrite)[[:space:]]+(CLAUDE\.md|AGENTS\.md)' "$recopy_out"; then
+  echo "FAIL: no-op recopy flagged CLAUDE.md or AGENTS.md as conflict/overwrite" >&2
+  echo "      template render must match disk bytes (see D-025)" >&2
+  exit 1
+fi
 commit_count_after="$("$REAL_GIT" rev-list --count HEAD)"
 if [ "$commit_count_after" -ne 2 ]; then
   echo "FAIL: no-op recopy produced a new commit ($commit_count_after commits total)" >&2
@@ -300,7 +338,8 @@ if ! grep -qxF "git@github.com:bogus/injected.git" "$REPOS"; then
   exit 1
 fi
 
-uvx copier recopy --trust --skip-answered --overwrite --defaults
+uvx copier recopy --trust --skip-answered --overwrite --defaults \
+  --data gsd_docs_handle=testuser
 
 if grep -qxF "git@github.com:bogus/injected.git" "$REPOS"; then
   echo "FAIL: local edit to ade-repos.txt survived recopy (template did not win)" >&2
@@ -361,11 +400,15 @@ for url in "${NOT_EXPECTED[@]}"; do
     exit 1
   fi
 done
-# AGENTS.md / CLAUDE.md / README.md must have no gsd-docs content.
+# AGENTS.md / CLAUDE.md / README.md must have no gsd-docs content or sentinel.
 for f in AGENTS.md CLAUDE.md README.md; do
   if grep -qF gsd-docs "$TEST_ADE_PARTIAL/$f"; then
     echo "FAIL: $f mentions gsd-docs despite include_gsd_docs=false" >&2
     grep -n gsd-docs "$TEST_ADE_PARTIAL/$f" >&2
+    exit 1
+  fi
+  if grep -qF 'GSD-DOCS:multi-repo-paths:BEGIN' "$TEST_ADE_PARTIAL/$f"; then
+    echo "FAIL: $f contains gsd-docs sentinel region despite include_gsd_docs=false (D-025)" >&2
     exit 1
   fi
 done

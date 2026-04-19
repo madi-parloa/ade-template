@@ -90,4 +90,35 @@ Optional integrations declared for this ADE (see `agentic-stack.md`):
 These are **not** auto-installed. Follow the activation command in `agentic-stack.md`.
 {% else -%}
 No optional agentic integrations are declared for this ADE. Full catalog: `agentic-stack.md` and `agent-guardrails/docs/agentic-stack-map.md`.
-{% endif -%}
+{% endif %}
+{%- if include_gsd_docs %}
+<!-- GSD-DOCS:multi-repo-paths:BEGIN -->
+## GSD Multi-Repo Path Resolution
+
+This workspace uses `gsd-docs` for centralized GSD planning. The `.planning/`
+directory is a symlink into the `gsd-docs` repository.
+
+### Path qualification
+
+All file paths in `PLAN.md` files MUST be repo-qualified when the workspace
+contains multiple repositories: `parloa-infra:modules/stamp/main.tf`.
+
+### Commit splitting
+
+- Code commits go in the target code repo.
+- Planning commits go in `gsd-docs/` on the `docs` branch only.
+- Use `gsd-docs/bin/gsd-split-commit` for combined flows.
+
+### Ownership Contract
+
+You are `{{ gsd_docs_handle }}`.
+
+**Your write zone**: `users/{{ gsd_docs_handle }}/**`, any path through `<workspace>/.planning/`, and `projects/**`.
+
+**Absolute boundary**: Never read or write `users/<other-handle>/**`. If a task requires it, STOP and ask the operator.
+
+Writes through `.planning/PROJECT.md` propagate to `projects/<name>/` via symlinks. This is by design.
+
+Push only to the `docs` branch. Never push to `main`.
+<!-- GSD-DOCS:multi-repo-paths:END -->
+{%- endif %}

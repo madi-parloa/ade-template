@@ -17,6 +17,7 @@ Copier prompts for the ADE name, which repo groups to include, which optional in
 | `include_gsd_docs` | bool | `true` | Clone `parloa/gsd-docs` and wire `.planning/` to the shared workspace |
 | `include_agent_guardrails` | bool | `true` | Clone `madi-parloa/agent-guardrails` (clone-only; activate manually) |
 | `include_cursor_self_hosted_agent` | bool | `true` | Clone `madi-parloa/cursor-self-hosted-agent` |
+| `gsd_docs_handle` | str (gated on `include_gsd_docs`) | empty | Your GitHub handle for `gsd-docs` — substituted into the template-owned gsd-docs sentinel region in `CLAUDE.md` / `AGENTS.md`. Must match what `gsd-docs/bin/onboard.sh` detects (D-025) |
 | `portfolio_groups` | multiselect | all 5 groups | Include `core-infra` / `stamps` / `catalog` / `kitchens` / `template-source` (see D-023 for group contents) |
 | `extra_repos` | multiline | empty | Extra repos to clone, one per line. Short-name DSL (see below) |
 | `default_org` | str, hidden | `parloa` | Default GitHub org for bare repo names; override with `--data default_org=other-org` |

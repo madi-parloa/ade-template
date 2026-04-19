@@ -83,6 +83,8 @@ Current task list (order matches `copier.yml`):
 | gsd-docs onboard (`gsd-docs/bin/onboard.sh`) | pwd + `when: include_gsd_docs` | copy + recopy (when enabled) |
 | Finalize: `.git/` check → scaffold path (git init + ADE scaffold commit + open Cursor) OR recopy path (conflict-marker check + auto-commit) | pwd + on-disk state | copy + recopy |
 
+The gsd-docs onboard task's `inject_sentinel` reconciles the `<!-- GSD-DOCS:multi-repo-paths:BEGIN -->` … `<!-- GSD-DOCS:multi-repo-paths:END -->` block in `CLAUDE.md` / `AGENTS.md`, but the template also renders that exact block (gated on `include_gsd_docs`, handle from `gsd_docs_handle`). The template render is byte-matched to what `inject_sentinel` would produce, so on recopy copier reports `identical` and onboard's rewrite is a no-op. Without this invariant, every recopy would show cosmetic `conflict / overwrite` lines for the two files. See D-025.
+
 The sync loop never `git pull`s existing repos. A recopy that brings in a new entry results in one `git clone`; already-cloned repos are left alone so that user WIP branches are never stomped. Users who want to refresh everything run the explicit pull one-liner documented in the scaffolded `README.md`.
 
 Kitchen installers (`claudes-kitchen/setup-cooking-environment.sh`, `open-kitchen/setup-cargo-jfrog.sh`) are deliberately skipped; see D-013.

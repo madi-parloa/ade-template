@@ -457,3 +457,66 @@ uses it.
   human-facing inputs stay terse.
 - No support for three-segment paths (`org/suborg/repo`). Not a real GitHub shape,
   rejected to keep the grammar unambiguous.
+
+## D-025: Template owns the gsd-docs sentinel region
+
+**Decision:** The gsd-docs multi-repo-paths sentinel region — the block between
+`<!-- GSD-DOCS:multi-repo-paths:BEGIN -->` and `<!-- GSD-DOCS:multi-repo-paths:END -->`
+markers in `CLAUDE.md` and `AGENTS.md` — is rendered by the template
+(`template/CLAUDE.md.jinja`, `template/AGENTS.md.jinja`), gated on
+`include_gsd_docs`, with the handle substituted from the new `gsd_docs_handle`
+question. `gsd-docs/bin/onboard.sh`'s `inject_sentinel` function still runs
+afterwards; it finds the sentinel already present with identical content, so
+its rewrite is byte-identical and produces no diff.
+
+**Context:** Before this decision, only `onboard.sh` knew about the sentinel
+region. It appended the block to `CLAUDE.md` and `AGENTS.md` after every
+copier run. On the next `copier recopy`:
+
+1. Copier renders `CLAUDE.md` without the sentinel (template didn't declare it).
+2. Disk has "template body + sentinel" from the previous `onboard` run.
+3. Copier sees the divergence, declares `conflict`, applies `--overwrite`,
+   writes a body with no sentinel.
+4. `onboard.sh` runs as task 3 and re-injects the sentinel.
+5. Task 4 (finalize) finds no diff (net-zero change) and commits nothing.
+
+The end state is correct, but the per-recopy log carries two noisy
+`conflict / overwrite` lines for `CLAUDE.md` and `AGENTS.md` every time, and
+the flow relies on two non-trivial pieces of state (template render + post-task
+injection) disagreeing and being reconciled. That's the wrong invariant — the
+template should own everything under its name.
+
+**How byte-identity is preserved:** `inject_sentinel` is byte-idempotent when
+the existing block matches what it would render: it reads the target file line
+by line, substitutes the whole region between `BEGIN` and `END` markers with
+the freshly-rendered snippet, and writes back. If the rendered snippet is
+identical to what was already there (same handle, same layout), the new bytes
+equal the old bytes. Copier then reports `identical` on recopy, not `conflict`.
+
+This requires the template render to match onboard's `printf '\n%s\n'` layout
+exactly: one blank line before `<!-- BEGIN -->`, single trailing newline after
+`<!-- END -->`. The Jinja tails use `{% if include_gsd_docs %}` (no left-strip)
+before the block and `{%- endif %}` (left-strip the trailing newline after
+`<!-- END -->`) after it to produce those exact bytes.
+
+**Why a `gsd_docs_handle` question instead of autodetection:** Copier answers
+are resolved at render time, before any `_task` has run. `gsd-docs/bin/onboard.sh`
+detects the GitHub handle at task-3 time via `gh api user` or
+`gsd-docs/.gsd-docs-user`, but that's too late — the render has already
+happened and the handle placeholder would still be literal in the template
+output. The cleanest fix is a dedicated question, gated on `include_gsd_docs`
+so it's only asked when relevant, with an empty default so the user must
+provide it once.
+
+**Consequence of handle mismatch:** If `gsd_docs_handle` differs from what
+`onboard.sh` detects, `inject_sentinel` rewrites the block with the detected
+handle and the rendered-vs-disk diff reappears on the next recopy. Fix by
+re-running `copier recopy` without `--skip-answered` and correcting the
+answer. This is the single concrete reason the question exists and is not
+hidden behind `when: false`.
+
+**Trade-off:** A new answer key (`gsd_docs_handle`) to reconcile a problem
+that lived entirely in onboard/copier timing. Accepted because the
+alternative (parsing `gsd-docs/.gsd-docs-user` inside a `_task` and having
+it rewrite the template output) would put the render under two owners
+again — exactly what this decision removes.
