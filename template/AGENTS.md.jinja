@@ -42,14 +42,33 @@ You are running in an ADE (Agent Dev Environment). This workspace contains multi
 - Follow existing commit message conventions in each repo.
 - Run linters and formatters before committing.
 
+{% if include_gsd_docs -%}
+## GSD planning (gsd-docs)
+
+This workspace uses `gsd-docs/` for centralized GSD planning. The `.planning/`
+directory at the workspace root is a symlink into `gsd-docs/`. Shared project
+context (PROJECT.md, codebase intel) lives in `gsd-docs/projects/{{ ade_name }}/`;
+personal implementation plans live in `gsd-docs/users/<handle>/projects/{{ ade_name }}/.planning/`.
+
+- Push planning changes to `gsd-docs` on the `docs` branch only.
+- Push code changes per-repo as usual.
+- Use `gsd-docs/bin/gsd-split-commit` for combined flows.
+- Never modify files under `gsd-docs/users/<someone-else>/`.
+
+See `gsd-docs/README.md` and `gsd-docs/LAYOUT.md` for the full specification.
+
+{% endif -%}
 ## Agentic stack
 
 This ADE runs on the `agent-guardrails` stack. Defaults always on:
 
 - **GSD** workflow spine (workspace-local `.cursor/`)
+{% if include_gsd_docs -%}
+- **gsd-docs** shared planning — `.planning/` symlinked to `gsd-docs/`, agent adapters auto-installed
+{% endif -%}
 - **Review chain + claim-verifier** — runs before every PR; hostile-review line-number claims are fact-checked against the repo
 - **Policy-gate MCP + hook enforcement** — see `agent-guardrails/README.md`
-- **Pre-seeded `.planning/codebase/*.md`** — 7-file intelligence layer
+- **Pre-seeded `.planning/codebase/*.md`** — 7-file intelligence layer{% if include_gsd_docs %} (migrated into gsd-docs on scaffold){% endif %}
 
 {% set _any_optional = (include_code_graph_mcp != "none") or include_code_mode_mcp or include_letta_memory_mcp or (include_eval_pipeline != "none") -%}
 {% if _any_optional -%}

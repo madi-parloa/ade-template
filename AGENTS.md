@@ -7,14 +7,15 @@ This is a Copier template repo, not a runtime project. It scaffolds Agent Dev En
 - `copier.yml` — Copier configuration: questions, `_tasks`, `_subdirectory` setting
 - `README.md` — GitHub landing page
 - `docs/DESIGN.md` — Full design document with motivation and architecture
-- `docs/DECISIONS.md` — Decision log (D-001 through D-020) with context for every choice
+- `docs/DECISIONS.md` — Decision log (D-001 through D-021) with context for every choice
 - `template/` — Everything copier renders into an ADE:
   - `.jinja` files are rendered with variable substitution (suffix stripped in output)
   - Non-`.jinja` files are copied verbatim
   - Portfolio sync and GSD workspace-local install are driven by copier `_tasks` in `copier.yml` (not a separate shell script). Both run on `copier copy` AND `copier update` — sync is clone-if-missing (never pulls existing repos), and GSD install tracks `@latest`. On `copier update` they run **once per invocation** (in the real destination) — each task guards itself with a `$PWD` check that skips copier's internal temp render dirs; see D-015. The `portfolio_file` seed, `git init`, and Cursor launch are all guarded to first-scaffold-only via `when: "{{ _copier_operation == 'copy' }}"`; the `portfolio_file` seed is scaffold-only because re-applying it on update broke updates when the source file was gone and clobbered template additions — see D-019. An **`_migrations`** entry (not a `_task`) with `when: "{{ _stage == 'after' }}"` writes a `chore: copier update to <_version_to>` commit after copier applies its final diff, so the working tree is always clean after a successful update — see D-018 and D-020. Kitchen setup scripts (`claudes-kitchen`, `open-kitchen`) are deliberately NOT run — see `docs/DECISIONS.md` D-013. See D-007, D-009, D-015, D-018, D-019, and D-020 for the full `_tasks` / `_migrations` policy and its evolution.
-  - `ade-repos.txt` lists the default repo portfolio
-  - `.gitignore` uses an allowlist pattern (ignore every top-level dir except `.planning/`) — see D-014
-  - `.planning/codebase/*.md` are pre-seeded GSD intel files
+  - `ade-repos.txt` lists the default repo portfolio (includes `gsd-docs`)
+  - `.gitignore.jinja` renders a conditional gitignore: when `include_gsd_docs` is true, ignores the `.planning` symlink; when false, allowlists `.planning/` as a real directory — see D-014 and D-021
+  - `.planning/codebase/*.md` are pre-seeded GSD intel files (migrated into gsd-docs on scaffold when enabled)
+  - `copier.yml` Task 4 runs `gsd-docs/bin/onboard.sh` to wire the symlink, agent adapters, and pre-push hook — gated on `include_gsd_docs` (default true) — see D-021
 
 ## Working on this repo
 

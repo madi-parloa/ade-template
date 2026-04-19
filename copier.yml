@@ -11,7 +11,8 @@ _tasks:
   #     on disk and (b) clobber template additions landed by the 3-way merge.
   # No pwd gate needed: copier copy has no temp renders (only update does).
   - command: >-
-      {% if portfolio_file %}cp "{{ portfolio_file }}" ade-repos.txt{% else %}true{% endif %}
+      {% if portfolio_file %}cp "{{ portfolio_file }}" ade-repos.txt{% else
+      %}true{% endif %}
     when: "{{ _copier_operation == 'copy' }}"
   # Task 2: portfolio sync — clone any missing repos listed in ade-repos.txt.
   # Existing repos are never touched (never pulled). Gated against copier temp renders.
@@ -48,7 +49,11 @@ _tasks:
           fi
 
           echo "==> cloning $dir"
-          if ! git clone "$url" "$dir"; then
+          clone_args=""
+          if [ "$dir" = "gsd-docs" ]; then
+            clone_args="-b docs"
+          fi
+          if ! git clone $clone_args "$url" "$dir"; then
             echo "    WARNING: failed to clone $url (check access rights)"
             CLONE_FAILURES=$((CLONE_FAILURES + 1))
           fi
@@ -70,6 +75,32 @@ _tasks:
         esac
         echo "==> Installing/refreshing GSD workspace-locally..."
         npx -y get-shit-done-cc@latest --local --cursor
+  # Task 4: gsd-docs onboard — wires .planning/ symlink into gsd-docs.
+  # Creates a shared project (migrating template-seeded .planning/ content)
+  # and installs agent adapters + pre-push hook. See D-021.
+  # Gated against copier temp renders (same pattern as task 2/3).
+  # Gated on include_gsd_docs — repo is always cloned, but onboard is opt-in.
+  - command:
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        case "$PWD" in
+          */copier._main.*)
+            echo "==> [skip] copier temp render dir (task will run in destination): $PWD" >&2
+            exit 0
+            ;;
+        esac
+        if [ ! -d gsd-docs/bin ]; then
+          echo "==> [skip] gsd-docs not cloned — skipping onboard"
+          exit 0
+        fi
+        echo "==> Onboarding workspace into gsd-docs..."
+        if [ -d .planning ] && [ ! -L .planning ]; then
+          gsd-docs/bin/new-project.sh --shared "{{ ade_name }}" --workspace "$PWD"
+        fi
+        gsd-docs/bin/onboard.sh --workspace "$PWD"
+    when: "{{ include_gsd_docs }}"
   - command: "git init && git add -A && git commit -m 'ADE scaffold'"
     when: "{{ _copier_operation == 'copy' }}"
   - command:
@@ -145,6 +176,14 @@ portfolio_file:
   help: "Path to a custom repo list (one git URL per line, absolute path). Leave
     empty for default Parloa portfolio."
   default: ""
+
+include_gsd_docs:
+  type: bool
+  help: "Wire .planning/ into the shared gsd-docs repo (parloa/gsd-docs). The repo
+    is always cloned; this toggle controls whether onboard.sh runs to create the
+    symlink, agent adapters, and pre-push hook. Disable to keep .planning/
+    local."
+  default: true
 
 # --- Optional agentic-stack integrations ---
 # These populate docs/agentic-stack.md and AGENTS.md so the agent and user

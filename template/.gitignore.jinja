@@ -1,0 +1,16 @@
+# Ignore every top-level directory by default. This catches:
+#   - every repo cloned from ade-repos.txt (no matter how the list evolves)
+#   - workspace-local tooling dirs (.cursor/, gsd-docs/, etc.)
+#   - anything else that lands at the root
+# Template-managed top-level FILES are unaffected by this pattern.
+# See docs/DECISIONS.md D-014 for rationale.
+/*/
+{% if include_gsd_docs %}
+# .planning is a symlink into gsd-docs/ — managed there, not here (D-021).
+/.planning
+{% else %}
+# Allow .planning/ to be tracked (local GSD, no gsd-docs).
+!/.planning/
+{% endif %}
+# OS artifacts (can appear anywhere)
+.DS_Store

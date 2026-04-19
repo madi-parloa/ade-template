@@ -405,3 +405,51 @@ The copier documentation describes `_tasks` as running "after generation" but do
 - D-019's "copy-only portfolio_file seed" is what surfaced this bug. Without the masking effect of that task, any `copier update` that left `ade-repos.txt` divergent from template would have shown the same tree-dirty-after-commit result.
 
 **Validation:** `test.sh` continues to assert the full commit-count + commit-message + clean-tree lifecycle (scaffold produces 1 commit, content-changing update adds exactly 1 auto-commit with message `chore: copier update to v0.0.1`, no-op update adds 0 commits, tree clean throughout). The new D-019 scenario (scaffold with `portfolio_file`, delete source, update to v0.0.2) additionally verifies that the auto-commit message reads `chore: copier update to v0.0.2` and the tree is clean — end-to-end proof that `_version_to` resolves correctly and the post-diff state is what gets committed.
+
+## D-021: gsd-docs shared planning integration
+
+**Decision**: New ADEs are wired into `parloa/gsd-docs` by default via a copier
+question `include_gsd_docs` (boolean, default `true`). The `gsd-docs` repo is
+always cloned (it's in `ade-repos.txt`); the toggle controls whether `onboard.sh`
+runs to create the `.planning/` symlink, install agent adapters, and set up the
+`pre-push` hook.
+
+**What happens on scaffold (`copier copy`) with `include_gsd_docs=true`:**
+
+1. Task 2 clones `gsd-docs` with `-b docs` (all other repos use default branch).
+2. Task 4 runs `gsd-docs/bin/new-project.sh` — migrates the template-seeded
+   `.planning/` content (PROJECT.md, codebase intel) into
+   `gsd-docs/projects/<ade_name>/` and replaces the local directory with a symlink.
+3. Task 4 then runs `gsd-docs/bin/onboard.sh --workspace "$PWD"` — installs
+   agent adapters (Cursor rule, CLAUDE.md/AGENTS.md sentinel blocks) and the
+   `pre-push` hook inside `gsd-docs/.git/hooks/`.
+
+**What happens with `include_gsd_docs=false`:**
+
+1. `gsd-docs` is still cloned (available for manual onboarding later).
+2. Task 4 is skipped (`when: "{{ include_gsd_docs }}"`).
+3. `.planning/` remains a real directory tracked in the ADE repo.
+4. Template docs (AGENTS.md, CLAUDE.md, README.md) omit gsd-docs sections via
+   Jinja conditionals.
+
+**Template file changes:**
+
+- `ade-repos.txt`: added `git@github.com:parloa/gsd-docs.git`.
+- `.gitignore` → `.gitignore.jinja`: conditional — when enabled, ignores the
+  `.planning` symlink; when disabled, allowlists `.planning/` as a real directory.
+- `AGENTS.md.jinja`: "GSD planning (gsd-docs)" section and agentic-stack bullet
+  wrapped in `{% if include_gsd_docs %}`.
+- `CLAUDE.md.jinja`: symlink/commit note wrapped in `{% if include_gsd_docs %}`.
+- `README.md.jinja`: "What is this?" bullet and Files table conditional on toggle.
+- `copier.yml`: new question + Task 4 with `when:` guard.
+- `.planning/` seed content kept in template — `new-project.sh` migrates it on
+  first scaffold; it's the fallback when gsd-docs is disabled.
+
+**Why always clone, optionally onboard:** Engineers who initially skip gsd-docs
+can manually run `gsd-docs/bin/onboard.sh --workspace .` later without
+re-scaffolding. Keeping the clone present makes this a zero-friction upgrade path.
+
+**Why default `true`:** Shared planning is the recommended workflow for Parloa
+ADEs. Defaulting to enabled ensures new engineers land in the happy path without
+needing to know about the toggle. Advanced users can set `include_gsd_docs=false`
+for isolated experiments.

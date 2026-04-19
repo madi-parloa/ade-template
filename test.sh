@@ -63,8 +63,8 @@ folders = data.get("folders", [])
 settings = data.get("settings", {})
 problems = []
 
-if len(folders) != 16:
-    problems.append(f"expected 16 folders (15 portfolio + ADE root), got {len(folders)}")
+if len(folders) != 17:
+    problems.append(f"expected 17 folders (16 portfolio + ADE root), got {len(folders)}")
 if settings.get("git.autoRepositoryDetection") is not False:
     problems.append(
         f"git.autoRepositoryDetection should be False, "
@@ -188,8 +188,8 @@ python3 -c "
 import json
 with open('$WS') as f:
     data = json.load(f)
-assert len(data['folders']) == 16, 'folders count wrong after update'
-print('  ok: update preserved 16 folders')
+assert len(data['folders']) == 17, 'folders count wrong after update'
+print('  ok: update preserved 17 folders')
 "
 
 echo ""
@@ -247,6 +247,96 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
   exit 1
 fi
 echo "  ok: update succeeded with missing portfolio_file; ade-repos.txt preserved; tree clean"
+
+echo ""
+echo "==> Scenario: include_gsd_docs=false — gsd-docs content must be absent (D-021 negative)..."
+TEST_ADE3="$SCRATCH/test-ade-no-gsd-docs"
+uvx copier copy --trust --defaults \
+  --data ade_name=test-no-gsd \
+  --data portfolio_file=/dev/null \
+  --data include_gsd_docs=false \
+  "$TEMPLATE_COPY" "$TEST_ADE3"
+
+cd "$TEST_ADE3"
+
+# --- AGENTS.md assertions ---
+if grep -qF "gsd-docs" AGENTS.md; then
+  echo "FAIL: AGENTS.md contains 'gsd-docs' when include_gsd_docs=false" >&2
+  grep -n "gsd-docs" AGENTS.md >&2
+  exit 1
+fi
+if grep -qF "GSD planning (gsd-docs)" AGENTS.md; then
+  echo "FAIL: AGENTS.md contains 'GSD planning (gsd-docs)' section when disabled" >&2
+  exit 1
+fi
+echo "  ok: AGENTS.md has no gsd-docs content"
+
+# --- CLAUDE.md assertions ---
+if grep -qF "gsd-docs" CLAUDE.md; then
+  echo "FAIL: CLAUDE.md contains 'gsd-docs' when include_gsd_docs=false" >&2
+  grep -n "gsd-docs" CLAUDE.md >&2
+  exit 1
+fi
+if grep -qF "symlink" CLAUDE.md; then
+  echo "FAIL: CLAUDE.md mentions 'symlink' when gsd-docs is disabled" >&2
+  exit 1
+fi
+echo "  ok: CLAUDE.md has no gsd-docs content"
+
+# --- README.md assertions ---
+if grep -qF "gsd-docs" README.md; then
+  echo "FAIL: README.md contains 'gsd-docs' when include_gsd_docs=false" >&2
+  grep -n "gsd-docs" README.md >&2
+  exit 1
+fi
+# Files table should show local .planning/ entries, not symlink
+if ! grep -qF ".planning/PROJECT.md" README.md; then
+  echo "FAIL: README.md missing '.planning/PROJECT.md' in Files table (local mode)" >&2
+  exit 1
+fi
+if ! grep -qF ".planning/codebase/*.md" README.md; then
+  echo "FAIL: README.md missing '.planning/codebase/*.md' in Files table (local mode)" >&2
+  exit 1
+fi
+echo "  ok: README.md has no gsd-docs content, shows local .planning/ entries"
+
+# --- .gitignore assertions ---
+if grep -qF "/.planning" .gitignore | grep -vqF "!/.planning/"; then
+  # /.planning (ignore symlink) should NOT be present; !/.planning/ (allowlist) should be
+  :
+fi
+if grep -q '^/.planning$' .gitignore; then
+  echo "FAIL: .gitignore ignores .planning symlink when gsd-docs is disabled" >&2
+  exit 1
+fi
+if ! grep -qF '!/.planning/' .gitignore; then
+  echo "FAIL: .gitignore missing '!/.planning/' allowlist when gsd-docs is disabled" >&2
+  exit 1
+fi
+echo "  ok: .gitignore allowlists .planning/ (no symlink ignore)"
+
+# --- .planning/ should be a real directory, not a symlink ---
+if [ -L .planning ]; then
+  echo "FAIL: .planning is a symlink when gsd-docs is disabled" >&2
+  exit 1
+fi
+if [ ! -d .planning ]; then
+  echo "FAIL: .planning/ directory missing when gsd-docs is disabled" >&2
+  exit 1
+fi
+if [ ! -f .planning/PROJECT.md ]; then
+  echo "FAIL: .planning/PROJECT.md missing when gsd-docs is disabled" >&2
+  exit 1
+fi
+echo "  ok: .planning/ is a real directory with seed content"
+
+# --- Tree must be clean (git init + commit happened) ---
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  echo "FAIL: tree dirty after scaffold with include_gsd_docs=false" >&2
+  git status --short >&2
+  exit 1
+fi
+echo "  ok: tree clean after scaffold"
 
 echo ""
 echo "==> All tests passed"

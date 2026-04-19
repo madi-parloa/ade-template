@@ -10,6 +10,9 @@ This is an **ADE (Agent Dev Environment)** — a Cursor workspace scaffolded fro
 - GSD (Get Shit Done) installed workspace-locally for spec-driven development. Refreshed on every `copier update` (tracks `@latest`).
 - The `claudes-kitchen/` and `open-kitchen/` repos cloned as reference source. Their setup scripts are NOT auto-run — they mutate user/system state (see `claudes-kitchen/setup-cooking-environment.sh`). Run them manually if you want global installation.
 - Pre-seeded codebase intelligence in `.planning/codebase/` so GSD is immediately Parloa-aware.
+{%- if include_gsd_docs %}
+- **gsd-docs** shared planning — `.planning/` is a symlink into `gsd-docs/`, backed by `parloa/gsd-docs` on the `docs` branch. Shared project context + personal implementation plans. See `gsd-docs/README.md`.
+{%- endif %}
 
 ## Quick start
 
@@ -58,6 +61,11 @@ for d in */; do [ -d "$d/.git" ] && git -C "$d" pull --ff-only; done
 | `AGENTS.md` | Agent-level workspace context (what repos are here, conventions, guardrails) |
 | `CLAUDE.md` | Claude-specific instructions |
 | `ade-repos.txt` | Git URLs of repos to clone |
+{% if include_gsd_docs -%}
+| `.planning/` | Symlink into `gsd-docs/` — shared project context + personal plans |
+| `gsd-docs/` | Clone of `parloa/gsd-docs` (`docs` branch) — shared GSD planning |
+{% else -%}
 | `.planning/PROJECT.md` | GSD project definition |
 | `.planning/codebase/*.md` | Pre-seeded codebase intelligence |
+{% endif -%}
 | `.cursor/` | Workspace-local Cursor config (populated by copier `_tasks` / GSD, refreshed on every `copier update`) |

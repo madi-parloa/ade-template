@@ -22,5 +22,8 @@ git@github.com:parloa/open-kitchen.git
 git@github.com:madi-parloa/cursor-self-hosted-agent.git
 git@github.com:madi-parloa/agent-guardrails.git
 
+# GSD shared planning (cloned with -b docs; onboard.sh wires .planning/ symlink — see D-021)
+git@github.com:parloa/gsd-docs.git
+
 # ADE template (this template's source repo)
 git@github.com:madi-parloa/ade-template.git
