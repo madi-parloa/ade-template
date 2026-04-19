@@ -168,10 +168,12 @@ portfolio_file:
 # --- Optional agentic-stack integrations ---
 # These populate docs/agentic-stack.md and AGENTS.md so the agent and user
 # know what's declared active for this ADE. They are NOT auto-installed into
-# the user's ~/.cursor/ — apply them manually by running
+# the ADE's .cursor/ — apply them manually by running
 #   ./agent-guardrails/install.sh --with=<derived list>
-# after scaffolding. This matches the existing kitchen policy (user/system-
-# level installs are never auto-run; see docs/DECISIONS.md).
+# from the scaffolded ADE root after scaffolding. install.sh defaults to
+# workspace scope (writes into <ade>/.cursor/ via $PWD), which matches the
+# workspace-local isolation goal in docs/DECISIONS.md (D-001). The kitchen
+# policy of never auto-running installs still applies.
 
 include_code_graph_mcp:
   type: str

@@ -35,7 +35,7 @@ Quick reference for the agentic mechanics active (or declared) in this ADE. Full
 
 ### How to activate
 
-These are **not** auto-installed into your user-global `~/.cursor/` config, consistent with the kitchen policy (see `docs/DECISIONS.md` in the template source). Apply them once, manually:
+These are **not** auto-installed. Apply them once, manually, from this ADE's root. `install.sh` defaults to workspace scope (writes into `<ade>/.cursor/`), so guardrails only activate in this ADE — no leakage into other Cursor workspaces on your machine:
 
 ```bash
 ./agent-guardrails/install.sh --with={{ _optional_ids | join(",") }}
@@ -46,7 +46,7 @@ Re-running `copier update` will regenerate this file if you change your answers,
 Configure the required env vars in your shell (export in `~/.zshrc`, use a secret manager, etc.) before restarting Cursor.
 
 {% else %}
-No optional MCP integrations were selected during scaffolding. Run `copier update` and answer the prompts to change this, or edit `agent-guardrails/mcp-optional/` and `~/.cursor/mcp.json` by hand.
+No optional MCP integrations were selected during scaffolding. Run `copier update` and answer the prompts to change this, or edit `agent-guardrails/mcp-optional/` and this ADE's `.cursor/mcp.json` by hand (created the first time you run `./agent-guardrails/install.sh` from here).
 
 See `agent-guardrails/mcp-optional/README.md` for the full catalog.
 {% endif %}
