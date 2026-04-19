@@ -27,7 +27,7 @@ Early iterations designed a custom `ade` CLI with `ade new`, `ade launch`, `ade 
 - The v1 scope (clone repos + run install script) is too thin to justify a new binary.
 - Copier already handles template scaffolding, parameterization, and lifecycle updates.
 - `uvx copier` runs without installation (`uv` was already present on the host).
-- Template updates propagate via `copier update`, which copier handles natively.
+- Template updates propagate via `copier recopy`, which copier handles natively.
 
 ### 2. Workspace-local installation, not user-level
 
@@ -48,49 +48,61 @@ Earlier iterations explored:
 
 The repo root holds `copier.yml` and `README.md` (copier config + landing page). All template content lives under `template/`. This prevents copier machinery (`.yml`, `.jinja` suffixes) from cluttering the template output.
 
-### 4. Git init in _tasks for copier update support
+### 4. The update command is `copier recopy`, not `copier update`
 
-`copier update` requires the destination to be a git repo (hard requirement — the source code raises `UserMessageError("Updating is only supported in git-tracked subprojects.")`). This is a local `.git/` only — no remote, no push.
-
-Guard rule for `_tasks`: two orthogonal gating mechanisms, combined per task.
-
-1. **`when: "{{ _copier_operation == 'copy' }}"`** — restricts a task to first-scaffold only. Used for tasks that would fail or be user-hostile on `copier update` (`git init` would find no `.git/`; Cursor launch would re-launch on every template bump; the `portfolio_file` seed would clobber template additions and break if the source file is gone — see D-019).
-2. **`case "$PWD" in */copier._main.*) exit 0 ;; esac`** at the top of the task body — skips copier's internal temp render dirs (the `old_copy` and `new_copy` passes of its three-way merge), leaving only the destination pass. Used for tasks that must run on `copier update` but should run **exactly once per update**, not three times. See D-015.
-
-Auto-commit uses a third mechanism — `_migrations` with `when: "{{ _stage == 'after' }}"` — because `_tasks` run *before* copier applies its final diff to the destination (see `copier/_main.py:_apply_update` and D-020). `_migrations` "after" fires post-diff, which is the only correct timing for committing the final state.
-
-Current policy per task (order matches `copier.yml`):
-
-| Task | `when` | pwd gate? | Runs on copy | Runs on update |
-|---|---|---|---|---|
-| Seed `ade-repos.txt` from `portfolio_file` (if provided) | `copy` | n/a | yes | **no** (D-019) |
-| Portfolio sync — **clone-if-missing** loop | none | yes | yes | yes — once in destination (new repos cloned; existing repos untouched) |
-| GSD install — `npx -y get-shit-done-cc@latest --local --cursor` | none | yes | yes | yes — once in destination (tracks `@latest`) |
-| `git init && git add -A && git commit -m 'ADE scaffold'` | `copy` | n/a | yes | no |
-| Cursor launch (`cursor --new-window`) | `copy` | n/a | yes | no |
-| `_migrations` auto-commit `chore: copier update to <_version_to>` | `_stage == 'after'` | n/a (migrations only fire in destination) | no | yes — once, after diff-apply (D-018 / D-020) |
-
-The sync loop never `git pull`s existing repos. `copier update` bringing in a new `ade-repos.txt` entry results in one `git clone`; already-cloned repos are left alone so that user WIP branches are never stomped. Users who want to pull everything run the one-liner documented in the scaffolded `README.md`.
-
-Kitchen installers (`claudes-kitchen`, `open-kitchen`) are deliberately skipped; see D-013.
-
-**`ade-repos.txt` ownership model (v0.8.5+, D-019):** the `portfolio_file` input is a scaffold-time seed only. After first scaffold, `ade-repos.txt` is project-owned and lives in the ADE's git history. On `copier update` it's merged by copier's built-in 3-way diff just like every other template file — so new default repos added upstream land automatically where the user hasn't diverged, and user-local edits are preserved where they have diverged. Users who want to change portfolio post-scaffold edit `ade-repos.txt` directly; the clone-if-missing sync task then picks up any newly listed entries on the next update.
-
-**One-command-forever update contract (v0.8.4+, refined in v0.8.5):** `uvx copier update --trust --skip-answered` is designed to be a true single entry point — no pre-commit of previous updates, no prompts, no post-commit. The `_migrations` auto-commit at the end of the update chain ensures the working tree is clean after every successful update, so the next update has no dirty-tree blocker. If copier's 3-way merge produces unresolved conflict markers, the auto-commit aborts loudly and the tree is left dirty for manual resolution — same failure mode as pre-v0.8.4. See D-018 for the safety analysis and D-020 for why the `_tasks`-based implementation in v0.8.4 had to be moved to `_migrations`.
-
-The evolution of this policy — v0.7.0 unguarded-with-pull, v0.7.1 guarded-to-copy-only, v0.7.2 unguarded-clone-if-missing under accepted 3× execution, v0.8.3 pwd-gated for 1× execution, v0.8.4 add auto-commit-on-update, v0.8.5 portfolio_file copy-only + auto-commit moved to `_migrations` — is documented in D-007, D-009, D-015, D-018, D-019, and D-020. The copier double-render behavior that makes the pwd gate necessary is explained in D-009 and D-015. The inner-copy-pass vs. diff-apply lifecycle distinction that forces auto-commit into `_migrations` is explained in D-020.
-
-### 5. Portfolio as a copier input with scaffold-time file override
-
-The default repo list lives in `template/ade-repos.txt`. Users can override the initial list at scaffold time via:
+The prescribed update flow for any ADE is:
 
 ```bash
-uvx copier copy --trust --data portfolio_file=/path/to/my-repos.txt ...
+uvx copier recopy --trust --skip-answered --overwrite
 ```
 
-A `_task` copies the user's file over the rendered `ade-repos.txt` during `copier copy` — gated with `when: "{{ _copier_operation == 'copy' }}"`. Absolute paths are required (tasks run in the output directory, not the user's CWD).
+`recopy` re-renders every template-owned file from the current template and writes the result to the destination. It does not perform copier's structural 3-way merge (`copier update` does). Combined with `_skip_if_exists: []` in `copier.yml`, every template-owned file is overwritten on every recopy. The contract is: **whatever the latest template version renders is what's on disk after the command returns.**
 
-After the initial scaffold, `ade-repos.txt` is owned by the ADE's git repo. Portfolio changes are made by editing `ade-repos.txt` directly and running `uvx copier update --trust --skip-answered` (which runs the clone-if-missing sync on any newly listed entries). The `portfolio_file` input is **not** re-applied on update — doing so broke multiple things in v0.8.4 (failed updates when the source file had moved, silently clobbered template additions, reverted user-local edits). See D-019 for the full reasoning.
+This is the right model because every template-owned file in the ADE is a derived artifact (AGENTS.md, CLAUDE.md, `.planning/codebase/*.md`, `.gitignore`, the workspace file, `ade-repos.txt`). There is no legitimate "user diverged from template" state for these files — if a user wants a different portfolio, they change the answer and recopy. Three-way merge on derived artifacts only hides template evolution.
+
+See D-022 for the full rationale, flag anatomy, and the finalize task that handles git init on first scaffold + auto-commit on recopy.
+
+### 5. `_tasks` run on both copy and recopy, pwd-gated to fire exactly once
+
+Every `_task` in `copier.yml` begins with:
+
+```bash
+case "$PWD" in
+  */copier._main.*) exit 0 ;;
+esac
+```
+
+Copier's render algorithm may create internal temp directories (`copier._main.old_copy.*`, `copier._main.new_copy.*`) during update or recopy, and `_tasks` fire in every render. The pwd gate ensures tasks execute **only in the real destination** — exactly once per invocation.
+
+Current task list (order matches `copier.yml`):
+
+| Task | Gate | Runs on |
+|---|---|---|
+| Portfolio sync (clone-if-missing loop over `ade-repos.txt`) | pwd | copy + recopy |
+| GSD install (`npx -y get-shit-done-cc@latest --local --cursor`) | pwd | copy + recopy |
+| gsd-docs onboard (`gsd-docs/bin/onboard.sh`) | pwd + `when: include_gsd_docs` | copy + recopy (when enabled) |
+| Finalize: `.git/` check → scaffold path (git init + ADE scaffold commit + open Cursor) OR recopy path (conflict-marker check + auto-commit) | pwd + on-disk state | copy + recopy |
+
+The sync loop never `git pull`s existing repos. A recopy that brings in a new entry results in one `git clone`; already-cloned repos are left alone so that user WIP branches are never stomped. Users who want to refresh everything run the explicit pull one-liner documented in the scaffolded `README.md`.
+
+Kitchen installers (`claudes-kitchen/setup-cooking-environment.sh`, `open-kitchen/setup-cargo-jfrog.sh`) are deliberately skipped; see D-013.
+
+### 6. Portfolio is answer-derived, not file-edited
+
+`ade-repos.txt` and `<ade>.code-workspace` are generated from copier answers — they are not user-editable source files. The answers that drive them:
+
+- `include_gsd_docs`, `include_agent_guardrails`, `include_cursor_self_hosted_agent` (booleans) — platform-layer toggles.
+- `portfolio_groups` (multiselect) — `core-infra`, `stamps`, `catalog`, `kitchens`, `template-source`.
+- `extra_repos` (multiline) — freeform list using the short-name DSL (D-024).
+- `default_org` (hidden, defaults to `parloa`) — org used when expanding bare repo names.
+
+All rendering is driven by macros in `_portfolio.jinja` at the template root: `platform_repos()`, `group_repos(group)`, `resolve_url(name)`, `repo_dir(name)`. Both `ade-repos.txt.jinja` and `{{ ade_name }}.code-workspace.jinja` import those macros `with context`, so the two files can never disagree about what URL or folder a short name refers to.
+
+Adding a new repo to a group: edit `_portfolio.jinja`, tag a new template version, recopy — every ADE picks it up on the next recopy.
+
+Adding a one-off repo to a single ADE: `uvx copier recopy --trust --overwrite` (without `--skip-answered`) re-prompts for `portfolio_groups` and `extra_repos` with the current answers as defaults. Or pass `--data extra_repos="$(cat my-repos.txt)"` to seed the answer directly.
+
+See D-023 for the full decision and D-024 for the short-name DSL.
 
 ### 6. Pre-seeded .planning/codebase/ intel
 
@@ -100,31 +112,38 @@ The seven GSD codebase intel files (`ARCHITECTURE.md`, `STACK.md`, `STRUCTURE.md
 - No need to run `/gsd-map-codebase` (which takes minutes and spawns multiple subagents) before starting work.
 - Static copies — regenerate with `/gsd-map-codebase` if the portfolio changes.
 
-### 7. ade-repos.txt stays in the output
+### 7. ade-repos.txt stays visible in the output
 
-Early iterations tried to hide this file (render → run → delete). Kept because:
-- Users edit `ade-repos.txt` to tweak the portfolio (and re-running `uvx copier update --trust --skip-answered` re-renders the Cursor workspace file — sorted alphabetically with the ADE root at top, per D-016 — and triggers `clone-if-missing` for any new entries).
-- The `ade-` prefix makes its purpose clear in the directory listing.
-- Copier manages it across template updates.
+Although `ade-repos.txt` is generated, it's kept as a visible file in the ADE root rather than hidden. Reasons:
 
-The install flow that reads this file has gone through four iterations: a re-runnable companion `ade-install.sh` (v0.1.x–v0.6.x), inlined unguarded `_tasks` with clone-or-pull making `copier update` the sync entry point (v0.7.0), inlined `_tasks` guarded to copy-only (v0.7.1), and finally unguarded inlined `_tasks` with a clone-if-missing sync loop (v0.7.2+). See D-007 for the full rationale and D-009 for the copier double-render behavior that shapes the guard decisions.
+- Users benefit from seeing the resolved portfolio at a glance. Each recopy regenerates it, so it always matches the answers.
+- The `ade-` prefix makes its purpose obvious in a directory listing.
+- The file header says clearly that edits are reverted on the next recopy and that portfolio changes are made by re-answering, not by editing.
 
 ## Architecture
 
 ```
 madi-parloa/ade-template (GitHub repo)
 ├── copier.yml                          # questions + _tasks
+├── _portfolio.jinja                    # portfolio macros (imported by template files)
 ├── README.md                           # repo landing page
-└── template/                           # _subdirectory: template
-    ├── {{_copier_conf.answers_file}}.jinja  # enables copier update
-    ├── AGENTS.md.jinja                 # workspace context (rendered with variables)
-    ├── CLAUDE.md.jinja                 # Claude-specific guidance
-    ├── README.md.jinja                 # human README
-    ├── ade-repos.txt                   # default portfolio (13 Parloa repos + template itself)
-    ├── .gitignore                      # allowlist: ignore /*/ except .planning/; see D-014
+├── AGENTS.md                           # repo-level agent context
+├── docs/
+│   ├── DESIGN.md
+│   └── DECISIONS.md
+├── test.sh                             # end-to-end copier copy + recopy scenarios
+└── template/                           # _subdirectory: rendered into the ADE
+    ├── {{_copier_conf.answers_file}}.jinja  # generates .copier-answers.yml
+    ├── AGENTS.md.jinja
+    ├── CLAUDE.md.jinja
+    ├── README.md.jinja
+    ├── agentic-stack.md.jinja
+    ├── ade-repos.txt.jinja             # generated from _portfolio.jinja macros
+    ├── {{ ade_name }}.code-workspace.jinja  # generated from same macros
+    ├── .gitignore.jinja                # conditional on include_gsd_docs (D-014 / D-021)
     └── .planning/
         ├── PROJECT.md.jinja            # GSD project seed
-        └── codebase/                   # 7 pre-seeded intel files
+        └── codebase/                   # 7 pre-seeded intel files (D-006)
             ├── ARCHITECTURE.md
             ├── CONCERNS.md
             ├── CONVENTIONS.md
@@ -134,74 +153,22 @@ madi-parloa/ade-template (GitHub repo)
             └── TESTING.md
 ```
 
-## copier.yml explained
+## copier.yml shape
 
-```yaml
-_min_copier_version: "9.0.0"
-_subdirectory: template           # template content lives under template/
+See `copier.yml` for the authoritative current state. Summary:
 
-_tasks:
-  # 1. Seed ade-repos.txt from a user-provided portfolio file (scaffold only).
-  #    `when: copy` scopes to the initial scaffold; on update, ade-repos.txt is
-  #    merged by copier's built-in 3-way diff like any other template file.
-  #    See D-019.
-  - command: >-
-      {% if portfolio_file %}cp "{{ portfolio_file }}" ade-repos.txt{% else %}true{% endif %}
-    when: "{{ _copier_operation == 'copy' }}"
-  # 2. Portfolio sync: clone missing repos; existing repos are never touched.
-  #    Propagates new ade-repos.txt entries on copier update.
-  #    Kitchen installers are deliberately skipped; see D-013.
-  - command:
-      - bash
-      - -c
-      - |
-        set -euo pipefail
-        case "$PWD" in
-          */copier._main.*) echo "==> [skip] copier temp render dir" >&2; exit 0 ;;
-        esac
-        # ...clone-if-missing loop reading ade-repos.txt...
-  # 3. GSD workspace-local install; tracks @latest so template evolution lands on update.
-  - command:
-      - bash
-      - -c
-      - |
-        set -euo pipefail
-        case "$PWD" in
-          */copier._main.*) echo "==> [skip] copier temp render dir" >&2; exit 0 ;;
-        esac
-        npx -y get-shit-done-cc@latest --local --cursor
-  # 4. Init git for copier update support (first scaffold only; no .git/ in copier temp dirs)
-  - command: "git init && git add -A && git commit -m 'ADE scaffold'"
-    when: "{{ _copier_operation == 'copy' }}"
-  # 5. Open Cursor (first scaffold only; otherwise Cursor relaunches on every update)
-  - command: "cursor --new-window '{{ ade_name }}.code-workspace'"
-    when: "{{ _copier_operation == 'copy' }}"
-
-# Runs after copier applies its post-task diff to the destination (see D-020).
-# This is where the working tree settles into its final post-update state, so
-# it's the correct hook for committing copier-managed changes. _tasks run too
-# early — during the inner copy pass, before copier's diff restores user
-# divergence from the old template.
-_migrations:
-  - when: "{{ _stage == 'after' }}"
-    command:
-      - bash
-      - -c
-      - |
-        # ... no-op-if-clean + conflict-marker detection + git add -A + commit ...
-        git commit -m "chore: copier update to {{ _version_to }}"
-```
-
-Copier's update algorithm re-executes `_tasks` three times per update (old-baseline temp render, new-target temp render, and real project — the double-render path; see D-009). Without the pwd gate, tasks 2 and 3 would run 3× on every update — wasteful enough to matter for GSD install (which refetches the npm manifest and rewrites `.cursor/` each time) and noisy in the log even when the sync loop is idempotent. The pwd gate (D-015) inspects `$PWD` at the top of each task body and bails out with `exit 0` when the working directory matches copier's temp-dir naming convention (`copier._main.old_copy.*` and `copier._main.new_copy.*`). Result: tasks 2 and 3 run **exactly once per `copier update`**, in the real destination. Tasks 1, 4, and 5 stay guarded to `copy` only for the independent reasons in the table above (portfolio_file seed is scaffold-only per D-019; no `.git/` in temp dirs for task 4; no point in re-launching Cursor on every template bump for task 5). The auto-commit is not a `_task` at all — it's an `_migrations` entry, because `_tasks` run *before* copier's `git apply --reject` step re-applies user divergence to the destination; by the time `_migrations` "after" fires, the destination is in its final post-update state (D-020).
+- `_subdirectory: template` — only files under `template/` are rendered into the output.
+- `_exclude: ["_*.jinja", ...]` — keeps the `_portfolio.jinja` macro file (which lives at the template root) out of the render.
+- `_skip_if_exists: []` — nothing is protected on recopy; template always wins.
+- Questions: `ade_name`, `description`, `include_gsd_docs`, `include_agent_guardrails`, `include_cursor_self_hosted_agent`, `portfolio_groups`, `extra_repos`, the four `include_*_mcp` / `include_eval_pipeline` agentic-stack toggles, `default_org` (hidden), `portfolio_file` (hidden, inert — see D-005).
+- `_tasks`: portfolio sync → GSD install → gsd-docs onboard (conditional) → finalize (git init + ADE scaffold on first copy; auto-commit on recopy).
 
 ## Known limitations (v1)
 
 - **Kitchens are cloned but not installed.** By design (see D-013). Users who want global kitchen installation must run `bash claudes-kitchen/setup-cooking-environment.sh` and `bash open-kitchen/setup-cargo-jfrog.sh` manually.
-- **Portfolio sync does not auto-pull existing repos.** `copier update` clones any repos newly added to `ade-repos.txt`, but never `git pull`s already-cloned repos (doing so on top of a user's WIP would be unsafe). Users who want to refresh everything run the one-liner documented in the scaffolded `README.md`. See D-007.
-- **ADEs scaffolded before v0.7.2 have stale gitlinks.** Prior `.gitignore` versions didn't catch nested portfolio repos, so `git add -A` on first scaffold tracked them as `160000`-mode gitlinks. After `copier update` to v0.7.2+ brings in the new `.gitignore`, run `git rm --cached -r <repo-name>` for each affected repo to drop the stale pointer. See D-014.
+- **Portfolio sync does not auto-pull existing repos.** Recopy clones any repos newly listed in the rendered `ade-repos.txt`, but never `git pull`s already-cloned repos (doing so on top of a user's WIP would be unsafe). Users who want to refresh everything run the one-liner documented in the scaffolded `README.md`. See D-007.
 - **macOS only.** Cursor path hardcoded to `/Applications/Cursor.app/Contents/MacOS/Cursor`.
 - **No per-ADE guardrail state.** Policy-gate and judge still use global `/tmp` paths. Two parallel ADEs with guardrails share state.
-- **copier update overwrites template-managed files.** If you edit `AGENTS.md` or `README.md` locally, `copier update` will merge changes (via git 3-way diff) but may produce conflicts.
 
 ## Future work
 

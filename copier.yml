@@ -1,21 +1,34 @@
 _min_copier_version: "9.0.0"
 _subdirectory: template
 
+# Copier defaults include `copier.yml`, `~*`, `*.py[co]`, `__pycache__`,
+# `.git`, `.DS_Store`, and `.svn`. We re-list them because setting
+# `_exclude` overrides the defaults. `_*.jinja` is a belt-and-suspenders
+# pattern for any macro file that accidentally lands under `template/`;
+# the canonical macro file (`_portfolio.jinja`) lives at the template
+# root, outside `_subdirectory`, so it's never copied in the first place.
+_exclude:
+  - "_*.jinja"
+  - copier.yaml
+  - copier.yml
+  - "~*"
+  - "*.py[co]"
+  - __pycache__
+  - .git
+  - .DS_Store
+  - .svn
+
+# Every template-owned file is re-rendered on `copier recopy`. No per-file
+# "template wins unless destination already has it" exceptions — the whole
+# point of the recopy model is that the latest template is what you get.
+# See docs/DECISIONS.md D-022.
+_skip_if_exists: []
+
 _tasks:
-  # Task 1: seed ade-repos.txt from a user-provided portfolio file, if any.
-  # Runs ONLY on initial scaffold (copier copy). See D-019:
-  #   - portfolio_file is a scaffold-time seed; after first scaffold, ade-repos.txt
-  #     is the source of truth, owned by the user (and merged by copier's 3-way
-  #     merge on subsequent `copier update`s).
-  #   - Running this on update would (a) fail if portfolio_file no longer exists
-  #     on disk and (b) clobber template additions landed by the 3-way merge.
-  # No pwd gate needed: copier copy has no temp renders (only update does).
-  - command: >-
-      {% if portfolio_file %}cp "{{ portfolio_file }}" ade-repos.txt{% else
-      %}true{% endif %}
-    when: "{{ _copier_operation == 'copy' }}"
-  # Task 2: portfolio sync — clone any missing repos listed in ade-repos.txt.
-  # Existing repos are never touched (never pulled). Gated against copier temp renders.
+  # Task 1: clone every URL in ade-repos.txt (missing only; existing repos are
+  # never touched — safe for WIP). ade-repos.txt is rendered from copier
+  # answers each run, so this loop propagates answer-driven portfolio changes.
+  # Pwd-gated against copier's internal temp render dirs (see D-022).
   - command:
       - bash
       - -c
@@ -61,7 +74,7 @@ _tasks:
         if [ "$CLONE_FAILURES" -gt 0 ]; then
           echo "==> $CLONE_FAILURES repo(s) failed to clone — continuing"
         fi
-  # Task 3: GSD install — tracks @latest. Gated against copier temp renders.
+  # Task 2: GSD install — tracks @latest. Pwd-gated.
   - command:
       - bash
       - -c
@@ -75,11 +88,9 @@ _tasks:
         esac
         echo "==> Installing/refreshing GSD workspace-locally..."
         npx -y get-shit-done-cc@latest --local --cursor
-  # Task 4: gsd-docs onboard — wires .planning/ symlink into gsd-docs.
-  # Creates a shared project (migrating template-seeded .planning/ content)
-  # and installs agent adapters + pre-push hook. See D-021.
-  # Gated against copier temp renders (same pattern as task 2/3).
-  # Gated on include_gsd_docs — repo is always cloned, but onboard is opt-in.
+  # Task 3: gsd-docs onboard — wires .planning/ symlink into gsd-docs, installs
+  # agent adapters + pre-push hook. See D-021. Gated on include_gsd_docs AND
+  # the presence of gsd-docs/bin (so it's a no-op if the clone failed).
   - command:
       - bash
       - -c
@@ -101,49 +112,63 @@ _tasks:
         fi
         gsd-docs/bin/onboard.sh --workspace "$PWD"
     when: "{{ include_gsd_docs }}"
-  - command: "git init && git add -A && git commit -m 'ADE scaffold'"
-    when: "{{ _copier_operation == 'copy' }}"
+  # Task 4: finalize. One task handles both the initial scaffold and every
+  # subsequent recopy/update, keyed off whether `.git/` already exists at
+  # the destination when the task starts:
+  #
+  #   - no `.git/` → this is the first `copier copy`. git init, commit
+  #     everything as 'ADE scaffold', and open the workspace in Cursor.
+  #   - `.git/` exists → this is a recopy or update. Detect conflict markers
+  #     (defensive — `--overwrite` should prevent them). If the working tree
+  #     is clean, exit quietly. Otherwise stage everything and commit as
+  #     'chore: copier recopy to <vcs_ref_hash>', leaving a revertable
+  #     single-commit record of the template bump.
+  #
+  # Why key off `.git/` and not `_copier_operation`: copier sets
+  # `_copier_operation` to `'copy'` for BOTH `copier copy` and `copier
+  # recopy` (recopy is implemented as `run_copy` under the hood, see
+  # docs/DECISIONS.md D-022), so that variable can't distinguish "first
+  # scaffold" from "user is re-applying the template". The on-disk `.git/`
+  # state is the authoritative signal.
+  #
+  # Pwd-gated against copier's internal temp render dirs. Cursor is only
+  # launched on the initial scaffold — otherwise every recopy would re-open
+  # the workspace.
   - command:
       - bash
       - -c
       - |
-        set -eu
-        ws='{{ ade_name }}.code-workspace'
-        # Prefer the cursor CLI: --new-window reliably opens a fresh window
-        # via Cursor's IPC. `open -na Cursor <file>` does NOT — Cursor's
-        # single-instance lock routes the file open back to the primary
-        # process and the new bundle instance exits. Fall back to `open -a`
-        # (reuses window) only if no cursor binary is available.
-        if command -v cursor >/dev/null 2>&1; then
-          cursor --new-window "$ws"
-        elif [ -x /Applications/Cursor.app/Contents/Resources/app/bin/cursor ]; then
-          /Applications/Cursor.app/Contents/Resources/app/bin/cursor --new-window "$ws"
-        else
-          open -a Cursor "$ws"
-        fi
-    when: "{{ _copier_operation == 'copy' }}"
-
-# _migrations run at a different lifecycle point than _tasks:
-# _tasks run inside copier's INNER copy pass (before the diff from
-# old_copy is applied back over the destination — see copier/_main.py
-# `_apply_update`). _migrations "after" stage runs AFTER that diff has
-# been applied, so the working tree it sees is the final post-merge
-# state. That's where auto-commit belongs. See docs/DECISIONS.md D-019.
-_migrations:
-  - when: "{{ _stage == 'after' }}"
-    command:
-      - bash
-      - -c
-      - |
         set -euo pipefail
-        if ! git rev-parse --git-dir >/dev/null 2>&1; then
-          echo "==> [auto-commit] not a git repo — skipping" >&2
+        case "$PWD" in
+          */copier._main.*)
+            echo "==> [skip] copier temp render dir (task runs in destination): $PWD" >&2
+            exit 0
+            ;;
+        esac
+
+        if [ ! -d .git ]; then
+          echo "==> [scaffold] initializing git and creating ADE scaffold commit"
+          git init
+          git add -A
+          git commit -m 'ADE scaffold'
+
+          # Open the workspace in Cursor. Prefer the `cursor` CLI with
+          # --new-window: it reliably opens a fresh window via Cursor's IPC.
+          # `open -na Cursor <file>` does NOT — Cursor's single-instance lock
+          # routes the file open back to the primary process and the new
+          # bundle instance exits. Fall back to `open -a` (reuses window)
+          # only if no cursor binary is available.
+          ws='{{ ade_name }}.code-workspace'
+          if command -v cursor >/dev/null 2>&1; then
+            cursor --new-window "$ws" || true
+          elif [ -x /Applications/Cursor.app/Contents/Resources/app/bin/cursor ]; then
+            /Applications/Cursor.app/Contents/Resources/app/bin/cursor --new-window "$ws" || true
+          else
+            open -a Cursor "$ws" || true
+          fi
           exit 0
         fi
-        if git diff --quiet && git diff --cached --quiet; then
-          echo "==> [auto-commit] nothing to commit"
-          exit 0
-        fi
+
         conflicted=""
         while IFS= read -r f; do
           [ -f "$f" ] || continue
@@ -157,9 +182,15 @@ _migrations:
           echo "    Resolve conflicts manually, then: git add -A && git commit" >&2
           exit 0
         fi
-        echo "==> [auto-commit] copier update to {{ _version_to }}"
+
+        if git diff --quiet && git diff --cached --quiet; then
+          echo "==> [auto-commit] nothing to commit"
+          exit 0
+        fi
+
+        echo "==> [auto-commit] copier recopy to {{ _copier_conf.vcs_ref_hash }}"
         git add -A
-        git commit -m "chore: copier update to {{ _version_to }}"
+        git commit -m "chore: copier recopy to {{ _copier_conf.vcs_ref_hash }}"
 
 ade_name:
   type: str
@@ -171,12 +202,6 @@ description:
   help: One-line purpose for this ADE
   default: Parloa infra experiments
 
-portfolio_file:
-  type: str
-  help: "Path to a custom repo list (one git URL per line, absolute path). Leave
-    empty for default Parloa portfolio."
-  default: ""
-
 include_gsd_docs:
   type: bool
   help: "Wire .planning/ into the shared gsd-docs repo (parloa/gsd-docs). The repo
@@ -184,6 +209,59 @@ include_gsd_docs:
     symlink, agent adapters, and pre-push hook. Disable to keep .planning/
     local."
   default: true
+
+include_agent_guardrails:
+  type: bool
+  help: "Clone madi-parloa/agent-guardrails (policy-gate MCP, hooks, custom
+    skills/rules)? Clone-only; run its install.sh manually to activate."
+  default: true
+
+include_cursor_self_hosted_agent:
+  type: bool
+  help: "Clone madi-parloa/cursor-self-hosted-agent?"
+  default: true
+
+portfolio_groups:
+  type: str
+  multiselect: true
+  help: "Which Parloa repo groups to include? Each group expands to a fixed set
+    of repos — see docs/DECISIONS.md D-023."
+  choices:
+    - core-infra
+    - stamps
+    - catalog
+    - kitchens
+    - template-source
+  default:
+    - core-infra
+    - stamps
+    - catalog
+    - kitchens
+    - template-source
+
+extra_repos:
+  type: str
+  multiline: true
+  default: ""
+  help: |
+    Extra repos to clone, one per line. Short form 'some-repo' assumes parloa/some-repo.
+    Use 'org/some-repo' for a different org (e.g. 'madi-parloa/my-tool'). Full git URLs
+    (git@...:..., https://..., ending in .git) are also accepted. Blank lines and '#'
+    comments are ignored. See docs/DECISIONS.md D-024.
+
+default_org:
+  type: str
+  default: "parloa"
+  when: false
+  help: "Default GitHub org used when expanding bare repo names. Override via
+    `copier ... --data default_org=other-org` if scaffolding outside Parloa."
+
+portfolio_file:
+  type: str
+  default: ""
+  when: false
+  help: "Inert answer key, kept so older .copier-answers.yml files still load.
+    Portfolio is driven by portfolio_groups + extra_repos; see D-023."
 
 # --- Optional agentic-stack integrations ---
 # These populate docs/agentic-stack.md and AGENTS.md so the agent and user

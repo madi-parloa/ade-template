@@ -4,7 +4,7 @@ Quick reference for the agentic mechanics active (or declared) in this ADE. Full
 
 ## Always on (default)
 
-- **GSD workflow spine** — workspace-local install in `.cursor/` (run on every `copier update`)
+- **GSD workflow spine** — workspace-local install in `.cursor/` (refreshed on every `copier recopy`)
 - **Review chain + claim-verifier** — `skills/review-chain/` and `skills/claim-verifier/` via `agent-guardrails`
 - **Policy-gate MCP + hook enforcement** — `agent-guardrails/mcp-policy-gate/`
 - **Pre-seeded codebase intel** — `.planning/codebase/*.md` (7 files)
@@ -41,12 +41,12 @@ These are **not** auto-installed. Apply them once, manually, from this ADE's roo
 ./agent-guardrails/install.sh --with={{ _optional_ids | join(",") }}
 ```
 
-Re-running `copier update` will regenerate this file if you change your answers, but **will not** re-run the `install.sh` command — that stays explicit.
+Re-running `copier recopy` will regenerate this file if you change your answers, but **will not** re-run the `install.sh` command — that stays explicit.
 
 Configure the required env vars in your shell (export in `~/.zshrc`, use a secret manager, etc.) before restarting Cursor.
 
 {% else %}
-No optional MCP integrations were selected during scaffolding. Run `copier update` and answer the prompts to change this, or edit `agent-guardrails/mcp-optional/` and this ADE's `.cursor/mcp.json` by hand (created the first time you run `./agent-guardrails/install.sh` from here).
+No optional MCP integrations were selected during scaffolding. Run `uvx copier recopy --trust --overwrite` (omit `--skip-answered`) and answer the prompts to change this, or edit `agent-guardrails/mcp-optional/` and this ADE's `.cursor/mcp.json` by hand (created the first time you run `./agent-guardrails/install.sh` from here).
 
 See `agent-guardrails/mcp-optional/README.md` for the full catalog.
 {% endif %}
@@ -75,7 +75,7 @@ Intentionally **not** integrated into this ADE — these are either separate age
 
 ```bash
 cd {{ ade_name }}
-uvx copier update --trust
+uvx copier recopy --trust --overwrite
 ```
 
-Answer the optional-integration prompts differently. This file re-renders; apply the change by running the `install.sh --with=` command above.
+Omit `--skip-answered` and answer the optional-integration prompts differently. This file re-renders; apply the change by running the `install.sh --with=` command above.

@@ -42,6 +42,14 @@ You are running in an ADE (Agent Dev Environment). This workspace contains multi
 - Follow existing commit message conventions in each repo.
 - Run linters and formatters before committing.
 
+## Keeping this ADE up to date
+
+```bash
+uvx copier recopy --trust --skip-answered --overwrite
+```
+
+`recopy` re-renders every template-owned file from the latest template (latest wins), clones any newly declared repos, refreshes GSD, and auto-commits the result. `ade-repos.txt` and `<ade_name>.code-workspace` are generated from your copier answers — do not hand-edit; edits are reverted on the next recopy. To change the portfolio, re-run without `--skip-answered` and re-answer `portfolio_groups` / `extra_repos`.
+
 {% if include_gsd_docs -%}
 ## GSD planning (gsd-docs)
 

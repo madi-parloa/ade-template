@@ -11,9 +11,9 @@ Decisions made during design and implementation, with context for why.
 **Alternatives considered:**
 - Custom bash CLI (~200 lines) — rejected: maintenance burden for marginal UX gain
 - degit (no `.git/` in output) — rejected: no parameterization, no update lifecycle
-- cookiecutter — rejected: copier has `_tasks` and `copier update`; cookiecutter doesn't
+- cookiecutter — rejected: copier has `_tasks` and a native update/recopy lifecycle; cookiecutter doesn't
 
-**Trade-off:** Depends on copier's idiosyncrasies (e.g., `--trust` required for `_tasks`, git required for `copier update`). Accepted because the alternative (custom tooling) has worse idiosyncrasies.
+**Trade-off:** Depends on copier's idiosyncrasies (e.g., `--trust` required for `_tasks`, git required at the destination for `copier recopy`). Accepted because the alternative (custom tooling) has worse idiosyncrasies.
 
 ## D-002: Workspace-local installation
 
@@ -31,25 +31,21 @@ Decisions made during design and implementation, with context for why.
 
 **Context:** Without `_subdirectory`, copier.yml and `.jinja` files appear in the output directory. The user pointed out that copier config files should not be mixed with template content.
 
-## D-004: Git init for copier update
+## D-004: Git init on first scaffold
 
-**Decision:** `_tasks` includes `git init && git add -A && git commit` guarded by `_copier_operation == 'copy'`.
+**Decision:** The consolidated finalize `_task` (see D-022) runs `git init && git add -A && git commit` whenever the destination has no `.git/` directory, creating the initial `ADE scaffold` commit.
 
-**Context:** `copier update` hard-requires a git repo at the destination. Verified via hostile subagent research: the source code raises `UserMessageError("Updating is only supported in git-tracked subprojects.")` with no bypass flag.
-
-Copier does NOT auto-init git (confirmed: no `_init_git` setting exists, [Discussion #2167](https://github.com/orgs/copier-org/discussions/2167) requests it).
+**Context:** `copier recopy` (and `copier update`, which we don't prescribe) hard-requires a git repo at the destination. The source code raises `UserMessageError("Updating is only supported in git-tracked subprojects.")` with no bypass flag. Copier does NOT auto-init git (no `_init_git` setting exists; [Discussion #2167](https://github.com/orgs/copier-org/discussions/2167) requests it). Without the finalize task, every ADE user would have to run `git init` by hand before the first recopy, which defeats the "one command" contract.
 
 The git repo is local only — no remote.
 
-**Guard is critical:** Without `when: "{{ _copier_operation == 'copy' }}"`, the git tasks would run in copier's internal temp directories during update, causing `fatal: not a git repository`. Discovered during end-to-end testing.
+**Why an on-disk state check, not `_copier_operation`:** `_copier_operation` is `'copy'` for both `copier copy` and `copier recopy` (see D-022), so it cannot distinguish "first scaffold" from "user is re-applying the template on an existing repo." The presence of `.git/` is the authoritative signal.
 
-## D-005: Portfolio as file input
+## D-005: `portfolio_file` is an inert backward-compatibility answer
 
-**Decision:** Default portfolio in `ade-repos.txt`, overridable via `--data portfolio_file=<path>`.
+**Decision:** The `portfolio_file` question is still declared in `copier.yml` with `when: false` and an empty default. It is not prompted and does not drive any task. The portfolio comes from `portfolio_groups` + `extra_repos` (D-023) instead.
 
-**Context:** User asked: "what if we make the list of repos via copier inputs, but I don't have to write a long list — feed a file to it."
-
-**Implementation:** `_tasks` copies the file over `ade-repos.txt` before running install. Absolute paths required because tasks run in the output directory.
+**Why keep it declared at all:** Older `.copier-answers.yml` files may contain a `portfolio_file: <path>` entry. Removing the question from `copier.yml` would cause copier to emit an "unknown answer" warning on every `recopy`. Keeping the question as `when: false` lets the stored answer be ingested silently and ignored.
 
 ## D-006: Pre-seeded codebase intel
 
@@ -59,53 +55,39 @@ The git repo is local only — no remote.
 
 Seven files: ARCHITECTURE, CONCERNS, CONVENTIONS, INTEGRATIONS, STACK, STRUCTURE, TESTING. All produced by `/gsd-map-codebase` on 2026-04-07.
 
-## D-007: ade-repos.txt stays in output; ade-install.sh removed from template
+## D-007: Portfolio sync is an inlined `_task`, not a separate shell script
 
-**Decision:** Keep `ade-repos.txt` in the ADE (not hidden or deleted after use). The separate `ade-install.sh` script was removed from the template; its clone loop and GSD install now live directly in copier `_tasks`. Both run on `copier copy` **and** `copier update`, but the sync loop is carefully constrained to be idempotent and cheap on repeated execution (see D-009).
+**Decision:** The clone-if-missing loop and the GSD install live directly in copier `_tasks` in `copier.yml`. There is no companion `ade-install.sh` script in the template. Both tasks run on `copier copy` and `copier recopy`, pwd-gated so they fire exactly once per invocation (in the real destination, not in copier's internal temp renders — see D-015).
 
-**Context:** Early iteration tried render → run → delete. User said: "might as well keep them, just rename to something understandable." The `ade-` prefix was chosen to make clear `ade-repos.txt` belongs to the ADE template system, not to any repo in the portfolio.
+**Why inlined:** A separate script would need its own versioning story (does the ADE's local copy of `ade-install.sh` win, or does the template's?), its own invocation docs ("after copier, run bash ade-install.sh"), and would drift from the copier `_tasks` over time. Keeping the logic inline makes the template the single source of truth.
 
-Version history of the install flow:
-1. **v0.1.x – v0.6.x:** `ade-install.sh` shipped as a re-runnable sync tool. Users could edit `ade-repos.txt` and re-run `bash ade-install.sh` to clone new repos / pull existing ones without touching copier. `copier copy` invoked the script via a `_tasks` entry guarded by `_copier_operation == 'copy'`.
-2. **v0.7.0:** The script was inlined into unguarded `_tasks` so that `copier update` would also re-sync the portfolio and GSD. This made `uvx copier update --trust` the single entry point for both template updates and re-sync. The loop did clone-**or-pull**: missing repos were cloned, existing repos were `git pull --ff-only`'d. It turned out to run the sync + GSD install **three times** per update because copier's double-render algorithm executes `_tasks` in (a) the "old baseline" temp render, (b) the "new target" temp render, and (c) the real target project. With a realistic portfolio this was ~30–90s of redundant network traffic: 3× `npx get-shit-done-cc` downloads plus 3× `git pull` on every repo, for zero user benefit (the temp renders are discarded). See D-009 for the copier behavior.
-3. **v0.7.1:** Sync and GSD install were re-guarded with `_copier_operation == 'copy'`. They ran only on first scaffold. This killed the 3× cost but regressed a real use case: adding a new repo to `ade-repos.txt` in the template no longer propagated to existing ADEs on `copier update`. Users had to run a manual clone snippet from the README. The v0.7.0 design had the right semantics (update = sync) but the wrong implementation (pull everything).
-4. **v0.7.2+ (current):** Sync and GSD install are **unguarded again**, but the sync loop is rewritten as **clone-if-missing, never pull**. Existing repos are never touched. Template additions to `ade-repos.txt` propagate on `copier update` via one clone per new repo. Under the 3× double-render execution, the first iteration clones the missing repo and the other two see `[ -d "$dir" ]` and skip — net cost is one clone, not three. Users who want to update already-cloned repos run the explicit pull one-liner documented in the scaffolded `README.md` — this is deliberately not automatic because `git pull` on a user's WIP branch is the class of thing a scaffolder should never do silently.
+**Why clone-if-missing, never `git pull`:** Silently `git pull`-ing over a user's WIP branch is a class of side-effect a scaffolder should never produce. The clone loop only acts on missing repos; already-cloned repos are left alone regardless of branch state. Users who want to refresh all clones run `for d in */; do [ -d "$d/.git" ] && git -C "$d" pull --ff-only; done` — documented in the scaffolded README.
 
-**Trade-off:** `copier update` no longer auto-pulls existing repos. Users wanting to refresh everything run `for d in */; do [ -d "$d/.git" ] && git -C "$d" pull --ff-only; done`. Accepted because: (a) auto-pulling over a user's uncommitted work is strictly worse than requiring an explicit action, and (b) the original user-visible pain point — "new repo in template doesn't land on update" — is fixed.
+**Why `ade-repos.txt` stays visible in the output:** It's a generated artifact (D-023) but users benefit from seeing the resolved portfolio at a glance. The `ade-` prefix makes it clear the file belongs to the ADE template system, not to any repo in the portfolio. Edits to it are reverted on the next recopy; the file header says so explicitly.
 
-## D-008: Answers file for copier update
+## D-008: Ship the answers file via Jinja
 
-**Decision:** Include `{{_copier_conf.answers_file}}.jinja` in the template.
+**Decision:** Include `{{_copier_conf.answers_file}}.jinja` in the template so every scaffold writes `.copier-answers.yml` to the destination.
 
-**Context:** Copier does NOT auto-generate `.copier-answers.yml` unless the template explicitly includes a Jinja file with that name. Discovered when the answers file was missing from scaffolded ADEs. Without it, `copier update` can't determine which template version was used or what answers were given.
+**Context:** Copier does NOT auto-generate `.copier-answers.yml` unless the template explicitly includes a Jinja file with that name. Without it, `copier recopy` cannot determine which template version was used or read back stored answers — every recopy becomes a fresh `copier copy` with no `--skip-answered` behavior, and the finalize task loses access to `vcs_ref_hash` for its commit message trailer.
 
-## D-009: Which `_tasks` are guarded, and why
+## D-009: How `_tasks` are gated
 
-**Decision:** The guard rule is **"guard destructive or one-shot tasks; leave idempotent tasks unguarded so template evolution propagates."**
+**Decision:** Every task in `copier.yml` is pwd-gated at the top of its body:
 
-| Task | Guarded to `copy` only? | Why |
-|---|---|---|
-| `cp "{{ portfolio_file }}" ade-repos.txt` | no | Trivial; no-op when `portfolio_file` is empty. |
-| Portfolio sync (clone-if-missing loop) | **no** | Must propagate new repos added to `ade-repos.txt` on update. Idempotent: 3× execution results in 1 clone + 2 no-op `[ -d ]` checks. See D-007. |
-| GSD install (`npx -y get-shit-done-cc@latest --local --cursor`) | **no** | `@latest` is the point — template bumps should land on existing ADEs. 3× execution = 3× registry check, which is the acknowledged cost. |
-| `git init && git add -A && git commit` | **yes** | On copy, establishes the `.git/` that `copier update` requires. On update there's no `.git/` in copier's internal temp directories and `git add -A` would fail with `fatal: not a git repository` (original v0.1.x motivation for D-004). |
-| `open -a Cursor '{{ ade_name }}.code-workspace'` | **yes** | Otherwise Cursor would re-launch on every template update. |
+```bash
+case "$PWD" in
+  */copier._main.*) exit 0 ;;
+esac
+```
 
-**Context — the copier double-render algorithm:** Copier's `update` does a structural 3-way merge by re-rendering the template twice:
+Scaffold-vs-recopy behavior is handled inside tasks by state checks (e.g. `.git/` presence for the finalize task), not by a `when: "{{ _copier_operation == 'copy' }}"` clause. Content-sensitive gating (e.g. "only onboard gsd-docs if `include_gsd_docs`") uses Jinja `when:` clauses evaluated against copier answers.
 
-1. Re-render the **old baseline** version (from `.copier-answers.yml`'s `_commit`) into an internal temp directory, executing `_tasks` there.
-2. Re-render the **new target** version into a second temp directory, executing `_tasks` there too.
-3. Diff (1) against (2), apply the delta to the real project, execute `_tasks` in the real target.
+**Why pwd-gate everything:** copier's update flow re-renders the template multiple times into internal temp directories. Without the pwd gate, unguarded tasks run in every temp render as well as the real destination. The pwd substring `copier._main.` is copier's standard naming convention for these dirs (`copier._main.old_copy.*`, `copier._main.new_copy.*`, etc.) — matching it is the reliable way to distinguish "real destination" from "copier's scratch space." See D-015 for the full lifecycle rationale.
 
-Any unguarded `_tasks` entry runs **three times** per `copier update`. This constraint is the whole reason the guard/no-guard decision matters: you either ensure the task is idempotent and cheap on repeated invocation, or you guard it to `copy` only. There is no third option.
+**Why not key gating off `_copier_operation`:** `_copier_operation` equals `'copy'` for both `copier copy` and `copier recopy` (see D-022), so it cannot distinguish "first scaffold" from "user is re-applying the template." For tasks that need that distinction (the finalize task in D-022, which must `git init` on first scaffold but auto-commit on recopy), the on-disk `.git/` state is the correct signal. Using `_copier_operation` was an attractive API but it doesn't carry the information we need.
 
-**Version history:**
-
-- **v0.7.0:** All sync/install tasks unguarded, but the sync loop did clone-**or-pull**. 3× execution caused 3× `git pull` on every existing repo per update (~30–90s of wasted network traffic) and 3× `npx get-shit-done-cc` downloads.
-- **v0.7.1:** Everything non-trivial guarded to `copy`. Killed the cost, but regressed propagation: new repos added to `ade-repos.txt` in the template no longer landed on existing ADEs via `copier update`. The "single entry point for updates" story was broken.
-- **v0.7.2+ (current):** Sync + GSD install unguarded again; sync rewritten as **clone-if-missing, never pull** so 3× execution is idempotent (1 clone + 2 skips per new repo). GSD install is still 3×, accepted as the cost of `@latest` tracking. `git init` and Cursor launch remain guarded for the reasons in the table above.
-
-**Trade-off:** `copier update` does not auto-pull existing repos (only clones new ones). Users wanting to refresh all existing clones run the explicit pull one-liner from the scaffolded `README.md`. This is deliberate: silently `git pull`-ing over a user's WIP branch is a class of side-effect a scaffolder should never produce.
+**Why `npx get-shit-done-cc@latest` re-runs every time:** `@latest` tracking is the point — template bumps should land GSD refreshes on existing ADEs. The install is idempotent; re-running it re-applies skills/rules/hooks from the current published version. No additional gate needed.
 
 ## D-010: Include ade-template in its own portfolio
 
@@ -117,18 +99,15 @@ Any unguarded `_tasks` entry runs **three times** per `copier update`. This cons
 
 **Decision:** Tag releases with PEP 440-compatible versions (`v0.1.0`, `v0.2.0`, etc.).
 
-**Context:** Copier uses git tags to track template versions. Without tags, copier prints "No git tags found" and can't do proper version comparison for `copier update`.
+**Context:** Copier uses git tags to select "latest version" when no explicit `--vcs-ref` is passed to `recopy` or `update`. Without tags, copier prints "No git tags found" and falls back to `HEAD`. Tagging also lets the auto-commit message (`chore: copier recopy to <hash>`, D-022) be cross-referenced to a human-readable release.
 
-## D-012: Broken tags are unrecoverable in updates
+## D-012: Pre-tag tests are mandatory; broken tags must be force-deleted
 
 **Decision:** Never tag a release without first running `bash test.sh` successfully. If a broken tag ships, delete it from the remote immediately.
 
-**Context:** `copier update` computes its diff by re-rendering the template at BOTH the current baseline version (stored in `.copier-answers.yml`) and the target version. If the baseline tag has a jinja error (missing include, bad syntax, etc.), the baseline render crashes and the entire update fails — with no flag to skip baseline regeneration. The only user-side workarounds are:
+**Context:** `test.sh` exercises `copier copy` + `copier recopy --trust --skip-answered --overwrite` end-to-end against the local template checkout and verifies the finalize task's scaffold and recopy paths. Shipping a tag that fails this test means every user who runs recopy against it hits the same failure.
 
-1. Hand-edit `.copier-answers.yml` to point `_commit` at the last known-good tag (destructive to copier's merge semantics on the affected file).
-2. Delete the broken tag upstream so copier falls back to the previous tag.
-
-Neither is acceptable in a shared template. Therefore: pre-tag tests are mandatory, and `v0.6.0` was force-deleted after it shipped a broken `{% include %}` path that only manifested at `copier update` time (the broken-baseline double-render path).
+If a bad tag slips through, `git push --delete origin <tag>` on the remote is the right fix — copier will fall back to the previous tag. Hand-editing `.copier-answers.yml` to pin `_commit` at an older SHA is strictly worse; it hides the breakage from the user and the template author.
 
 ## D-013: Kitchen installers are not auto-run
 
@@ -165,70 +144,38 @@ None of this is workspace-local. Running these installers as part of `copier cop
 
 ## D-014: `.gitignore` allowlists `.planning/`, ignores every other top-level directory
 
-**Decision:** `template/.gitignore` ignores every top-level directory by default via `/*/`, then allowlists `.planning/` with `!/.planning/`. Individual portfolio repo names are not enumerated. Inside `.planning/`, GSD-volatile subdirs are re-ignored explicitly.
+**Decision:** `template/.gitignore` ignores every top-level directory by default via `/*/`, then allowlists `.planning/` with `!/.planning/` (and allowlists a few files like `ROADMAP.md` inside `.planning/`). Individual portfolio repo names are not enumerated.
 
-**Context:** Prior versions enumerated every cloned repo in `.gitignore`:
+**Why an allowlist, not an enumeration:** Enumerating every cloned repo has two failure modes:
 
-```
-parloa-infra/
-parloa-k8s/
-claudes-kitchen/
-...
-```
+1. **Missed entries cause gitlink pollution.** If a repo is missing from the list, `git add -A` on first scaffold tracks the freshly cloned repo as a **gitlink** (`160000` mode) — git's way of recording a nested repo's HEAD pointer. On subsequent recopy, as that repo's HEAD advances, the working tree reports it as modified, which trips copier's "Destination repository is dirty; cannot continue" check.
+2. **Maintenance burden.** Adding a new repo to the template would require remembering to add it to `.gitignore` as well. Silent coupling; easy to forget.
 
-This had two failure modes:
-
-1. **Missed entries caused gitlink pollution.** `ade-template/` was absent from the list, so during `_tasks` on first scaffold, `git add -A` tracked the freshly cloned `ade-template/` as a **gitlink** (`160000` mode) — git's way of recording a nested repo's HEAD pointer. On subsequent `copier update`, as the template's HEAD advanced (e.g., to `v0.7.1`), the working tree reported `ade-template` as modified, which tripped copier's "Destination repository is dirty; cannot continue" check. The user worked around this by deleting `ade-template/` from the destination — exactly the kind of manual unblock the template is supposed to prevent.
-2. **Maintenance burden.** Adding a new repo to `ade-repos.txt` required remembering to add it to `.gitignore` as well. Silent coupling; easy to forget; fails only on the second `copier update` after the miss.
-
-**Allowlist approach:** Invert the default. Ignore every top-level directory unconditionally (`/*/`), then surface only the template-managed ones with `!/.planning/`. Effects:
-
-- Every current and future repo in `ade-repos.txt` is ignored with no `.gitignore` edit.
-- `.cursor/` is ignored (no longer needs an explicit entry).
-- Template-managed **files** at root (`AGENTS.md`, `README.md`, `.copier-answers.yml`, `<ade>.code-workspace`, `ade-repos.txt`, etc.) are unaffected — `/*/` matches only directories.
-- `.planning/` is allowlisted; GSD-volatile subdirs inside it (`milestones/`, `phases/`, `intel/`, `research/`, `threads/`, `state/`) and two files (`config.json`, `ROADMAP.md`) are still ignored. Only `PROJECT.md` and `codebase/*.md` ship via the template.
+The allowlist inverts the default: ignore every top-level directory unconditionally (`/*/`), then surface only the template-managed ones. Every current and future portfolio repo is ignored with no `.gitignore` edit. Template-managed **files** at root (`AGENTS.md`, `README.md`, `.copier-answers.yml`, `<ade>.code-workspace`, `ade-repos.txt`, etc.) are unaffected — `/*/` matches only directories.
 
 **Trade-off:** If someone genuinely wanted to track a cloned repo's working copy (e.g., ship it as part of the scaffolded project), they'd need to add an explicit `!/name/` allowlist. No current use case needs this, and doing so would be conceptually wrong — portfolio repos are external dependencies, not scaffolded content.
 
-**Gitlink cleanup for existing ADEs:** ADEs scaffolded before v0.7.2 already have nested repos tracked as gitlinks in their `.git/index`. After `copier update` brings in the new `.gitignore`, run `git rm --cached -r <repo-name>` (without `-f`) to drop each stale pointer; the working tree is untouched. The new `.gitignore` then keeps them out on every future `git add`.
+## D-015: Skip `_tasks` in copier's temp render dirs
 
-## D-015: Skip `_tasks` in copier's temp render dirs (supersedes the "3× execution accepted" stance in D-007 / D-009)
+**Decision:** Every `_task` in `copier.yml` starts with a pwd gate:
 
-**Decision:** The portfolio-sync task, the GSD install task, and the `cp portfolio_file` task each guard their own body with a `case "$PWD" in */copier._main.*) exit 0 ;; esac` check at the top. On `copier update`, this causes those tasks to **no-op** in copier's internal render temp directories (`/private/var/folders/.../copier._main.old_copy.*` and `.../copier._main.new_copy.*`) and run **only once**, in the real destination.
+```bash
+case "$PWD" in
+  */copier._main.*) exit 0 ;;
+esac
+```
 
-**Context — how we got here:** D-007 and D-009 accepted that `_tasks` fires three times per `copier update` because copier's update algorithm re-renders the template at the old baseline and the new target for its three-way merge. The earlier conclusion was "make every unguarded task idempotent and cheap under 3× execution." For the portfolio sync that was fine (after the clone-if-missing rewrite in v0.7.2, 3× = 1 real clone + 2 `[ -d ]` skips). For the GSD install it was the acknowledged cost — 3× `npx -y get-shit-done-cc@latest --local --cursor`, which is one npm registry round-trip plus a re-install of ~79 skills each time.
+On `copier recopy`, this causes tasks to **no-op** in copier's internal render temp directories (`/private/var/folders/.../copier._main.old_copy.*` and `.../copier._main.new_copy.*`) and run **only once**, in the real destination.
 
-In practice the GSD install cost was not cheap: each invocation prints its full banner, refetches the npm manifest, and rewrites `.cursor/`. On a realistic `copier update` this meant three back-to-back GSD banners in the log and ~5–10 seconds of redundant work per invocation. The "accepted cost" story also made reading `copier update` output confusing — the user sees cloning output twice and GSD install output three times, which reads like a bug even though it was correctly documented as a feature.
-
-The pwd gate eliminates both cost and confusion. After v0.8.3, a clean `copier update` on an already-synced ADE produces: two `==> [skip]` lines for the old_copy render, the real sync/install output for the destination, and two more `==> [skip]` lines for the new_copy render.
+**Why this is needed:** Copier's recopy flow re-renders the template into temp directories as part of its diff computation, and `_tasks` fire in every render. Without a gate, tasks that clone repos or run `npx` would execute 3× per invocation — wasteful enough to matter for the GSD install (which refetches the npm manifest and rewrites `.cursor/`) and confusing in the log (three back-to-back banners).
 
 **Why a pwd check, not some other gate:**
 
-- **Checking `_copier_operation`** — copier exposes this Jinja variable (`copy` vs `update`), but all three renders on update set it identically. It does not distinguish the temp renders from the real destination.
-- **Checking for `.git/` in `$PWD`** — the real destination has `.git/` (either pre-existing or created by task 4 on copy). Temp render dirs do not. BUT: on `copier copy`, task 2 (sync) and task 3 (GSD install) run **before** task 4 (`git init`), so at that moment the real destination also has no `.git/`. Using `.git/` as the gate would false-skip every fresh scaffold. Rejected.
-- **Checking `_copier_conf.answers_file`** — copier renders `.copier-answers.yml` in every render, including temp dirs. Not a discriminator.
-- **Sentinel file / lockfile** — works, but requires a cleanup step on success and opens the question "what if the cleanup is missed, does the ADE become stuck?" More moving parts than the pwd match.
-- **Moving expensive work to `_migrations`** — `_migrations` fire only on update, not copy. Would require duplicating the bash across `_tasks` (for copy) and `_migrations` (for update). Worse DRY.
-- **Waiting for a copier upstream fix** — no issue filed; copier's current behavior is defensible (tasks ARE part of the template, and the diff renders ARE template renders). Unknown timeline.
+- **`_copier_operation`** — copier sets this identically in all three renders, so it cannot distinguish "temp render" from "real destination."
+- **`.git/` presence** — on the real destination during a fresh `copier copy`, `.git/` doesn't exist yet (it's created by the finalize task, D-022). A `.git/`-based gate would false-skip on first scaffold. (The finalize task does use `.git/` state, but only to decide between scaffold and auto-commit paths — not to gate execution against temp renders.)
+- **Sentinel file / lockfile** — works, but requires a cleanup step and opens "what if cleanup is missed" failure modes. More moving parts than the pwd match.
 
-**Why the pwd check is correct:** On `copier copy`, there are no temp render dirs — copier renders straight into the destination. The gate's `case` never matches, every task runs once. On `copier update`, copier always names its temp dirs with `copier._main.<phase>_copy.<random>` where `<phase>` is `old` or `new`. The gate matches both and skips. Empirically validated with an instrumented template: copy produced `clone=1 gsd=1 git-init=1`; update produced `clone=1 gsd=1 git-init=0` plus visible `==> [skip]` messages for both temp renders.
-
-**Risks:**
-
-1. **Copier renames its temp dirs in a future version** (e.g., `copier._main.*` → `copier._render.*`). The gate would silently stop matching and updates would regress to 3× execution. Correct but wasteful — same shape as pre-v0.8.3 behavior. Mitigation: a comment in `copier.yml` points at this decision; `test.sh` exercises `copier update` end-to-end so any regression in temp-dir naming would surface as more-than-expected sync output in test logs.
-2. **A user's real destination path happens to contain the literal substring `copier._main.`.** Theoretically a false positive. Practically unreachable — that string doesn't occur in natural directory names.
-
-**One-time migration cost:** The very first `copier update` from v0.8.2 (no gate) to v0.8.3 (with gate) still does 2× execution instead of 3×. Copier's three-way merge renders the **old baseline** using the old template code, and v0.8.2's `_tasks` have no gate — so the old_copy temp render still does a full sync + GSD install that gets thrown away. The new_copy render uses v0.8.3's gate and correctly skips. From v0.8.3 onward, every update is fully clean. Retroactively fixing v0.8.2 is not possible (the tag is immutable and multiple ADEs in the wild point to it).
-
-**What this replaces:**
-
-- D-007's narrative that `v0.7.2+` "accepts 1 clone + 2 skips per new repo" under 3× execution is still factually accurate for v0.7.2 – v0.8.2 but is **no longer the policy from v0.8.3 onward**. Update is 1× execution in the destination.
-- D-009's table of "Which tasks are guarded, and why" stays correct for the `when: copy` guards on `git init` and Cursor launch. The three `_copier_operation`-unguarded rows (`cp portfolio_file`, portfolio sync, GSD install) are now additionally `PWD`-gated via this decision. See `copier.yml` for the authoritative current state.
-
-**Related changes in the same v0.8.3 release:**
-
-- D-016 documents the switch to alphabetical-with-root-first ordering in the generated Cursor workspace file.
-- D-017 documents the switch to `--skip-answered` in the `README.md` update instructions.
+**Why the pwd substring is safe:** Copier names its temp dirs with `copier._main.<phase>_copy.<random>` where `<phase>` is `old` or `new`. That substring doesn't occur in natural destination paths. If copier renames its temp dirs in a future version, tasks silently regress to multi-execution — correct but wasteful. `test.sh` exercises `copier recopy` end-to-end, so any regression would show up as extra sync output in test logs.
 
 ## D-016: Workspace file: root first, repos alphabetical
 
@@ -243,168 +190,11 @@ The pwd gate eliminates both cost and confusion. After v0.8.3, a clean `copier u
 - The section grouping in `ade-repos.txt` (`# Parloa infra core`, `# Stamps and Deployment Units`, ...) no longer propagates to the workspace view. That grouping is still meaningful for humans reading the portfolio file, just not rendered in the sidebar.
 - Alphabetical ordering means `ade-template` (the template's own clone) is the first folder after root. Acceptable — consistent with the alphabetical rule and easy to find.
 
-## D-017: Use `--skip-answered` in documented `copier update` invocations (where appropriate)
+## D-017: `--skip-answered` semantics in the prescribed recopy command
 
-**Decision:** The scaffolded `README.md` documents `uvx copier update --trust --skip-answered` (not `--trust` alone) in the routine "Updating" and "Different repos" sections. The `agentic-stack.md` "Changing your choices" section intentionally does NOT use `--skip-answered` — that section is explicitly about re-answering questions, and skipping them would defeat the purpose.
+**Decision:** The scaffolded `README.md` documents the routine update as `uvx copier recopy --trust --skip-answered --overwrite`. The `agentic-stack.md` "Changing your choices" section intentionally omits `--skip-answered` — that section is about re-answering existing questions, so skipping them would defeat the purpose. See D-022 for the full flag anatomy of the prescribed recopy command.
 
-**Context:** Without `--skip-answered`, every `copier update` re-prompts for the answers already stored in `.copier-answers.yml` (`ade_name`, `description`, `portfolio_file`, and four optional-integration toggles). The user has to press Enter seven times to accept the defaults, or think about each prompt again if they're in a hurry. For a command that's supposed to be routine — "just refresh my ADE" — seven prompts are friction.
-
-The `--skip-answered` flag (copier 9.x, documented in `uvx copier update --help`) suppresses prompts for questions that already have stored answers. New questions (e.g., if a future template version adds `include_xyz`) still prompt — which is the correct behavior.
-
-The user originally tried `--skip-answers` (plural) and got `Error: Unknown switch --skip-answers`. The correct flag is `--skip-answered`.
-
-**Where `--skip-answered` should NOT be used:** The `agentic-stack.md` "Changing your choices" block specifically exists for the case "I want to enable a code-graph MCP now, so I need to re-answer `include_code_graph_mcp`". Adding `--skip-answered` there would silently keep the old answer and confuse the user. Left as `--trust` only.
-
-**Trade-off:** None that we can see. `--skip-answered` is strictly better for the routine-update case and orthogonal to the new-question-added case.
-
-## D-018: `copier update` auto-commits its own changes (one-command-forever update)
-
-**Decision:** A final `_task` in `copier.yml`, gated to `_copier_operation == 'update'` and pwd-gated like the other update tasks, runs `git add -A && git commit -m "chore: copier update to <new_commit>"` at the end of every successful `copier update`. If the 3-way merge left unresolved conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`) in any modified file, the auto-commit is aborted with a loud message and the tree is left dirty for the user to resolve manually. If nothing changed (the update was a no-op), the task exits silently with `==> [auto-commit] nothing to commit`.
-
-**Context — what problem this solves:** From v0.8.3 onward, `copier update` renders its changes into the working tree and exits, leaving a dirty tree for the user to review and commit. This is copier's designed-in behavior — it cannot safely auto-commit because a 3-way merge may produce conflicts that a human must resolve. The consequence in practice:
-
-1. User runs `uvx copier update --trust --skip-answered`.
-2. Three files show as `M` in `git status`.
-3. User forgets to `git commit` (or defers it "until after reviewing").
-4. Days later, user runs `uvx copier update --trust --skip-answered` again → copier refuses with "Destination repository is dirty; cannot continue".
-5. User has to figure out what the old dirty files were, commit them, then re-run update.
-
-This broke the stated promise of the `Updating` section in the generated `README.md` ("Single entry point. Pulls template/docs changes…") because the single entry point, in practice, sometimes required a second manual step that wasn't documented.
-
-**Why auto-commit is safe here (even though copier itself refuses to do it generically):**
-
-Copier refuses to auto-commit because the general case includes:
-- Unrelated WIP in the working tree at update time.
-- 3-way merge conflicts that a human must resolve.
-- Projects with commit hooks, signing requirements, or review rules that prohibit automated commits.
-
-Each of those is addressed:
-- **Unrelated WIP:** copier already refuses updates on a dirty working tree. At the moment our auto-commit task runs, every dirty path in the destination is copier-managed by definition (either a rendered template file or `.copier-answers.yml` itself). `git add -A` is therefore safe in scope. If the user wants to keep WIP separate, they should be committing or stashing it before the update, which is already required.
-- **Merge conflicts:** the task scans every modified file for `^(<{7}|={7}|>{7})( |$)` markers (the three canonical git conflict markers as whole-line starts) and aborts auto-commit if any are found. The message directs the user to resolve and commit manually, which matches the pre-v0.8.4 behavior exactly. Zero regression when conflicts happen.
-- **Commit hooks / GPG signing:** the task does NOT pass `--no-verify` or `--no-gpg-sign`. If the user's gitconfig requires signing or runs pre-commit hooks, those run. If they fail, the commit fails, the tree is left dirty, and the user gets the hook/gpg error — again, same as pre-v0.8.4. No regression; we respect user git policy.
-
-**Why a separate `_task`, not wrapping `copier update` in a shell script:**
-
-- The docs have always pointed users at `uvx copier update --trust --skip-answered` as the single entry point. A wrapper script (say, `./update.sh`) would either require users to learn a new invocation or create a second, inconsistent entry point. Keeping the behavior inside `copier.yml` means the existing `uvx copier update --trust --skip-answered` command keeps working unchanged, and the auto-commit is transparent.
-- Tasks in `copier.yml` are versioned with the template. A wrapper script at the ADE root would be versioned with the ADE's own history and could drift from what the template expects.
-- The `when: "{{ _copier_operation == 'update' }}"` clause makes scaffold vs. update behavior precisely expressible in one file.
-
-**Why `_copier_operation == 'update'` and not `!= 'copy'`:**
-
-Copier's documented operations are `copy` and `update`. Using an equality check is more defensive than a not-equals check in case copier adds a new operation in a future major version. A hypothetical `bootstrap` operation shouldn't auto-commit.
-
-**Why use `git add -A` and not a curated file list:**
-
-Copier does not expose "the set of files copier just wrote" in a way `_tasks` can consume. The only reliable signal that a path is copier-managed is "it's dirty and we got here, and copier refused to run on a dirty tree". `git add -A` captures that cleanly. A curated list would drift from `template/` over time (every new template file would need manual maintenance) and would fail silently when drift happened.
-
-**Commit message format:** `chore: copier update to <new_commit_tag>`, e.g. `chore: copier update to v0.8.4`. Matches the convention the user was already using manually (confirmed in the v0.8.2→v0.8.3 cycle log: `chore: copier update v0.8.2 -> v0.8.3` was typed manually — the auto-commit format is the same concept). Uses `chore:` prefix so it sorts alongside other maintenance commits in conventional-commit tooling.
-
-**Trade-offs:**
-
-1. **Loss of per-file review opportunity.** Previously, the user could `git diff` the modified files after update and reject the whole update by `git checkout -- .` before committing. Now the update is committed immediately. Mitigation: `git revert HEAD` or `git reset HEAD^` is a one-liner if the user decides they don't want the update after all. The auto-commit is atomic and isolated, so reverting is clean.
-2. **Commit-hook-heavy projects may see surprising hook runs during update.** If an ADE's repo has a pre-commit hook that takes 30 seconds to run, `copier update` now includes that cost. Acceptable — the hooks exist for a reason, and running them on copier-managed commits is consistent with running them on any other commit.
-3. **First update from v0.8.3 (no auto-commit task) to v0.8.4 (with auto-commit task) still gets auto-committed.** The destination render uses the NEW template, which has the task. So v0.8.3 → v0.8.4 is self-committing. No awkward transition.
-4. **The task still runs GSD install on a no-op update** (where `_commit` matches and nothing rendered differently). The GSD install is idempotent and cheap on subsequent runs, so this is accepted — a finer gate ("only run GSD if version bumped") is a possible future optimization but out of scope here. The auto-commit correctly detects nothing-to-commit in this case and does not produce a commit.
-
-**What this replaces / relates to:**
-
-- D-007 and D-009 describe the `_tasks` evolution for portfolio sync and GSD install. Auto-commit joins that family as a fourth update-phase task with its own gate (`when: update` + pwd).
-- D-015 (pwd gate to run tasks once) is a direct prerequisite — without it, auto-commit would run in the old_copy and new_copy temp render dirs as well, polluting a non-destination directory's git state. The `when: update` clause plus the pwd gate together mean auto-commit runs exactly once per real update invocation.
-- D-017 (`--skip-answered`) removes prompt friction; D-018 removes commit friction. Together they realize the "single entry point" promise of the generated README.
-
-**Validation:** `test.sh` now asserts the full lifecycle:
-- After `copier copy`: exactly one commit (`ADE scaffold`), clean tree.
-- After `copier update v0.0.0 → v0.0.1` on a content-changing bump: exactly two commits (`ADE scaffold`, then `chore: copier update to v0.0.1`), clean tree.
-- After a second `copier update` at v0.0.1 (no-op): still two commits, clean tree, auto-commit correctly emits `nothing to commit`.
-
-> **Superseded by D-020 (v0.8.5):** the mechanism described above (final `_task` with `when: update` + pwd gate) was found to commit pre-merge state. See D-020 for the fix — the auto-commit is now an `_migrations` entry with `when: "{{ _stage == 'after' }}"`. The external contract (auto-commit fires at end of every successful update; same conflict-marker abort behavior; same commit-message format) is unchanged.
-
-## D-019: `portfolio_file` is a scaffold-time seed, not an update-time sync source
-
-**Decision:** The `_task` that seeds `ade-repos.txt` from `portfolio_file` is gated with `when: "{{ _copier_operation == 'copy' }}"`. It runs exactly once, during `copier copy`. On `copier update` the task is a no-op; `ade-repos.txt` is treated as user-owned and merged by copier's built-in 3-way merge (with template additions landing automatically where the user hasn't diverged).
-
-**Context — what v0.8.4 got wrong:** Up through v0.8.4 the seed task was `when`-unrestricted and pwd-gated, so it ran on every `copier update` in the destination. The rendered command was literally `cp "{{ portfolio_file }}" ade-repos.txt`. Three concrete failure modes flowed from that:
-
-1. **Update breaks when `portfolio_file` is no longer on disk.** User scaffolds with `--data portfolio_file=/tmp/my-list.txt`, deletes `/tmp/my-list.txt` later (it was a scratch file), then runs `uvx copier update`. The task fails under `set -euo pipefail` (`cp: /tmp/my-list.txt: No such file or directory`) → update aborts mid-flight → dirty tree → user cannot update and isn't told how to recover.
-2. **Template additions get clobbered.** Copier's merge lands new default repos into `ade-repos.txt` during the render phase. Our seed `_task` then runs `cp "$portfolio_file" ade-repos.txt`, overwriting the merged result. Custom-portfolio users never see template additions.
-3. **Local edits to `ade-repos.txt` get reverted.** Scaffolded with a `portfolio_file`, then added a personal repo by editing `ade-repos.txt` directly → next update reverts to whatever `portfolio_file` currently contains.
-
-All three follow from treating `portfolio_file` as a live source-of-truth on update. It isn't, and the docs never framed it that way — it's a convenience for the first scaffold.
-
-**Why copy-only is the right semantics:**
-
-- **Scaffold:** user picks a portfolio at copy time (either via the default `template/ade-repos.txt` or by passing `--data portfolio_file=<abs-path>`). The seed task copies it in. From this point `ade-repos.txt` is the project's portfolio state, owned by the project's git repo.
-- **Update:** `ade-repos.txt` is a regular template-tracked file. Copier's update applies `diff(old_template, new_template)` to the destination. New default repos in the template propagate through the merge; user's local edits are preserved by the same merge. No separate codepath needed.
-- **Changing portfolios later:** edit `ade-repos.txt` directly, run `uvx copier update`, and the portfolio-sync `_task` clones anything newly listed. This was already the documented path for portfolio edits; v0.8.5 makes it the only path.
-
-**Why not "copy on update only if the file still exists":**
-
-We considered making the task best-effort on update (skip if source missing, copy otherwise). Rejected because failure mode #2 (clobbering template additions) persists even if source exists. Copy-only is the only option that gets all three failure modes right, and it matches how every other copier answer behaves (stored at scaffold, referenced for re-prompt suppression, not re-executed on update).
-
-**Trade-offs:**
-
-- **Custom-portfolio users who expected `portfolio_file` to be a live pointer lose that behavior.** Not a real regression: nobody was known to be using it that way, the behavior was never documented, and the failure mode it exhibited (silent clobber of template additions) was worse than the current "scaffold-time only" semantics. The `portfolio_file` answer remains in `.copier-answers.yml` as a historical record; it just no longer triggers a `cp`.
-- **Answers file still contains a potentially stale path.** Fine. Copier treats the answer as data. It's only consulted when the scaffold task is re-evaluated, which no longer happens post-scaffold. Users who care can edit `.copier-answers.yml` to clear `portfolio_file: ""`, but there's no functional need to.
-
-**Commit tasks around this decision:**
-
-- `_tasks[0]` gains `when: "{{ _copier_operation == 'copy' }}"` and loses its pwd gate (copy has no temp renders; the gate was only needed because the task previously ran on update too).
-- Fallback rendering: when `portfolio_file` is empty the command renders to `true`, keeping the task valid under all inputs.
-
-**Validation:** `test.sh` now includes a scenario specifically for failure mode #1 — scaffold with `portfolio_file=<tmpfile>`, delete the tmpfile, bump the template to v0.0.2, run `copier update`. Must exit 0, `ade-repos.txt` unchanged (still custom), auto-commit fires, tree clean.
-
-**Related decisions:**
-
-- D-005 introduced `portfolio_file` as a scaffold input. This decision narrows its scope to match original intent.
-- D-015 introduced the pwd gate for tasks 2 and 3 (portfolio sync, GSD install). Task 1 no longer needs the gate because `when: copy` eliminates the temp-render run entirely.
-- D-018 / D-020: the auto-commit at end of update ensures template-merge changes to `ade-repos.txt` don't leave the tree dirty.
-
-## D-020: Auto-commit uses `_migrations` (not `_tasks`) to run AFTER copier's diff is applied
-
-**Decision:** The auto-commit introduced in D-018 is implemented as an `_migrations` entry with `when: "{{ _stage == 'after' }}"`, not as a final `_tasks` entry with `when: "{{ _copier_operation == 'update' }}"`. The external contract described in D-018 is unchanged (auto-commit fires after every successful update, aborts loudly on conflict markers, emits `nothing to commit` for no-op updates, commit message format is `chore: copier update to <new_commit_tag>`). Only the implementation hook changes.
-
-**Context — the bug we hit in v0.8.5 testing:** While adding the D-019 fix (portfolio_file copy-only), the test script's existing "`copier update v0.0.0 → v0.0.1` leaves a clean tree" assertion started failing. The auto-commit ran and produced a commit with `3 files changed`, but immediately after the commit `git status` reported `M ade-repos.txt`. The `ade-repos.txt` content in the commit was 15 repos (the template default); the working-tree content after copier finished was empty (the scaffold seed). Something was reverting the file after the `_task` ran.
-
-Reading `copier/_main.py:_apply_update()` revealed the actual update flow:
-
-1. Render old template (v_from) into a temp directory `old_copy`.
-2. Snapshot the current destination index as a git tree (`subproject_head`) — this is the user's *current, pre-update* state.
-3. Run `current_worker.run_copy()` on the destination. **This is the inner copy pass**: it overwrites destination files with the new template's rendered output, and it runs all `_tasks`. Our `_tasks`-based auto-commit fires here, capturing the new-template state written to destination.
-4. Render new template (v_to) into another temp directory `new_copy`.
-5. Compute `diff(old_copy → subproject_head)` — this is exactly "what the user had diverged from the old template." Apply this diff to the destination via `git apply --reject`.
-6. Run `migration_tasks("after", ...)` — these run post-diff-apply.
-
-Step 5 restores the user's pre-update divergence on top of the new template. That's the 3-way-merge-semantic: template additions land where user didn't touch, user customizations survive where template didn't touch. But it runs *after* our `_tasks`-based auto-commit. In the test scenario, the user's "divergence" was `ade-repos.txt = empty` (seeded from `/dev/null`), so step 5 reverted `ade-repos.txt` back to empty after the commit captured it as the 15-repos template default. Committed state and working-tree state ended up out of sync → dirty tree with the impossibility of resolving it without rewriting the commit.
-
-This bug was present in v0.8.4 too but *masked by v0.8.4's task 1*. In v0.8.4 task 1 (`cp /dev/null ade-repos.txt`) ran on every update, pre-reverting `ade-repos.txt` to empty *before* the auto-commit saw it — which matched the post-diff-apply state, so the commit was accidentally correct. Removing that masking (D-019) exposed the underlying bug.
-
-**Why `_migrations` is the right hook:**
-
-`_migrations` tasks with `_stage == "after"` run at step 6 in the flow above — after the diff from step 5 has been applied. By the time our command runs, the working tree reflects the final post-merge state that `copier update` will leave behind. Committing that state is correct: it matches what the user would see on exit.
-
-Confirmed behavior in `copier/_main.py` and `copier/_template.py`:
-- `_apply_update()` calls `migration_tasks("after", ...)` at the very end, after `apply_cmd << diff` and after `_remove_old_files`. No further mutation of the destination happens after this point.
-- `_execute_tasks()` (line 353) exposes migration extra-vars to Jinja prefixed with `_`: `stage` → `_stage`, `version_from` → `_version_from`, `version_to` → `_version_to`, plus `_copier_operation`. So `{{ _version_to }}` expands to the new template ref (e.g. `v0.8.5`) — same value that would have been parsed from `.copier-answers.yml`, but available directly in the render context.
-- A migration with no `version:` key fires on every update (including no-op updates where `version_from == version_to`), which matches our "commit whatever copier left dirty, or silently no-op" semantics. The no-op case is handled by the `git diff --quiet` check inside the command.
-
-**Why the `_tasks`-based implementation was never going to be right:**
-
-The copier documentation describes `_tasks` as running "after generation" but doesn't specify that during update, "after generation" means "after the inner copy pass, still before the final diff-apply." The distinction only matters when a task tries to commit or otherwise observe the final state. For our auto-commit, the distinction is fatal. No amount of pwd-gating or `when:` tweaking on a `_task` can move its execution point past step 5.
-
-**Trade-offs:**
-
-1. **`_migrations` only fires on update (not on copy).** That's the behavior we want anyway — on `copy`, the dedicated `git init && git add -A && git commit -m 'ADE scaffold'` task (D-004) handles the initial commit. No redundancy.
-2. **`_migrations` doesn't participate in copier's "number of tasks" reporting alongside `_tasks`.** Cosmetic. The migration prints its own `==> [auto-commit] copier update to <ref>` banner, which is clearer than "Running task N of M" anyway.
-3. **`_migrations` without a `version:` key is technically intended for per-version one-shot migrations in the copier docs, but it works on every update when the key is omitted.** We verified this behavior in `_template.py:migration_tasks()`; without a version key the `if "version" in migration` range check is skipped and the task is unconditionally appended to the result. This is stable API in copier 9.x.
-4. **Commit message source changed from awk-parsing `.copier-answers.yml` to `{{ _version_to }}`.** Strictly better: avoids reading a file that copier just re-rendered, and `_version_to` is the canonical value copier itself uses.
-
-**What this replaces / relates to:**
-
-- D-018 described the auto-commit feature and its safety analysis. Everything in D-018 about *why* we auto-commit, *why* it's safe, and *what to do about conflict markers* still applies. Only the "final `_task` with `when: update` + pwd gate" mechanism is replaced; the pwd gate is no longer needed because `_migrations` inherently run in the destination, never in temp render dirs.
-- D-015 explains copier's inner-copy pass running tasks in temp dirs. The same flow is what mis-timed the auto-commit in v0.8.4 — the pwd gate fixed the "runs 3×" symptom but not the "runs at wrong lifecycle point" root cause. `_migrations` addresses the root cause.
-- D-019's "copy-only portfolio_file seed" is what surfaced this bug. Without the masking effect of that task, any `copier update` that left `ade-repos.txt` divergent from template would have shown the same tree-dirty-after-commit result.
-
-**Validation:** `test.sh` continues to assert the full commit-count + commit-message + clean-tree lifecycle (scaffold produces 1 commit, content-changing update adds exactly 1 auto-commit with message `chore: copier update to v0.0.1`, no-op update adds 0 commits, tree clean throughout). The new D-019 scenario (scaffold with `portfolio_file`, delete source, update to v0.0.2) additionally verifies that the auto-commit message reads `chore: copier update to v0.0.2` and the tree is clean — end-to-end proof that `_version_to` resolves correctly and the post-diff state is what gets committed.
+**Rationale:** Without `--skip-answered`, every recopy re-prompts for every stored answer in `.copier-answers.yml` (`ade_name`, `description`, the platform toggles, `portfolio_groups`, `extra_repos`, and the agentic-stack toggles — 10+ prompts). For a command that's supposed to be routine — "just refresh my ADE" — that volume of prompts is pure friction. `--skip-answered` suppresses prompts for questions that already have stored answers; newly added questions still prompt, so template evolution is surfaced exactly once when the user first updates past the version that added the question. That's the correct trade-off for the routine case and orthogonal to the intentional re-answer case (which is why "Changing your choices" opts out).
 
 ## D-021: gsd-docs shared planning integration
 
@@ -453,3 +243,217 @@ re-scaffolding. Keeping the clone present makes this a zero-friction upgrade pat
 ADEs. Defaulting to enabled ensures new engineers land in the happy path without
 needing to know about the toggle. Advanced users can set `include_gsd_docs=false`
 for isolated experiments.
+
+## D-022: Update command is `copier recopy --trust --skip-answered --overwrite`
+
+**Decision:** The documented, supported update flow for any ADE is a single command:
+
+```bash
+uvx copier recopy --trust --skip-answered --overwrite
+```
+
+`recopy` re-renders every template-owned file from the current template and writes
+the result into the destination. It does not perform copier's structural 3-way
+merge. `_skip_if_exists` is empty, so no file is protected from re-render. The
+resulting contract is: **whatever the latest template version renders is what's
+on disk after the command returns.** No file drifts, nothing is quietly preserved
+from an earlier template version.
+
+**Flag anatomy:**
+
+- `--trust` — required because the template uses `_tasks` (clone loop, GSD install,
+  auto-commit). Without it, copier refuses to execute arbitrary commands.
+- `--overwrite` — required on `recopy`; otherwise copier prompts per-file
+  ("overwrite? [Y/n]") for every changed file. Recopy is definitionally "template
+  wins", so the prompt is pure friction.
+- `--skip-answered` — reuses answers already stored in `.copier-answers.yml` for
+  existing questions, so routine updates do not re-prompt. Newly introduced
+  questions (e.g. a future `include_new_thing`) are still prompted — template
+  evolution surfaces to the user exactly once, at the first recopy after the
+  template adds the question.
+
+**Why `--skip-answered`, not `--force` or `--defaults`:** `--force`
+(`--defaults --overwrite`) silently default-answers any new question. That would
+make template evolution invisible: a new `include_*` toggle added in a later
+version would be quietly answered `false` (or whatever the default is) on every
+user's next update without them ever knowing the question exists. `--skip-answered`
+gives the correct default-on-re-answer behavior *only for already-answered
+questions*, which is the combination we want.
+
+**Why `recopy` and not `copier update`:** `copier update` is copier's three-way
+merge (old template, new template, destination). It preserves local modifications
+where the user has diverged from the old template — which is the right default for
+*most* copier templates but the wrong default here. The ADE's template-owned files
+(AGENTS.md, CLAUDE.md, `.planning/codebase/*.md`, the workspace file, `ade-repos.txt`,
+`.gitignore`) have no legitimate "diverged" state: they're derived artifacts, not
+hand-authored content. Three-way merge on those files only hides template evolution.
+`recopy` + `--overwrite` makes the intent explicit.
+
+**What the auto-commit adds:** a single consolidated `_tasks` entry that,
+after all other tasks run, decides between two paths based on whether `.git/`
+already exists at the destination:
+
+- No `.git/` (first `copier copy`): `git init && git add -A && git commit -m
+  'ADE scaffold'`, then open the workspace in Cursor.
+- `.git/` exists (recopy or update): detect conflict markers; if clean, exit;
+  otherwise `git add -A && git commit -m "chore: copier recopy to <hash>"` where
+  `<hash>` is `_copier_conf.vcs_ref_hash`.
+
+The recopy commit is atomic and revertable (`git revert HEAD`) if the user
+decides they don't want this particular template bump.
+
+**Why key off `.git/`, not `_copier_operation`:** copier's `run_recopy` is
+implemented as `run_copy` under the hood and is decorated with
+`@as_operation("copy")`, so `_copier_operation` equals `'copy'` for BOTH
+`copier copy` and `copier recopy`. It only becomes `'update'` for `copier
+update` (the 3-way-merge command we do not prescribe). That means
+`_copier_operation` cannot distinguish "first-time scaffold" from "user is
+re-applying the template" — the on-disk `.git/` is the reliable signal.
+
+**Why `_copier_conf.vcs_ref_hash` in the commit message and not a semver
+tag:** `version_from` / `version_to` are only populated inside `_migrations`
+runs, which fire exclusively under `copier update`. Regular `_tasks` do not
+have a PEP440 "target version" variable available. `_copier_conf.vcs_ref_hash`
+is the commit SHA of the template ref being applied and is always populated,
+so it's the correct answer for the auto-commit trailer. The hash is stable
+across runs and `git log --oneline` still shows it next to the commit.
+
+**Trade-offs:**
+
+- Users who hand-edit template-owned files (`ade-repos.txt`, the workspace file)
+  lose those edits on the next recopy. This is the point — those files are
+  generated from answers (see D-023). If a user wants the edit, they change the
+  answer and recopy.
+- Commit-hook-heavy projects will run their pre-commit hooks on the auto-commit.
+  We respect user git policy (no `--no-verify` / `--no-gpg-sign`). If a hook fails,
+  the commit fails and the user sees the error — same as any other commit.
+
+## D-023: Portfolio is answer-derived, not file-edited
+
+**Decision:** Every input to the repo portfolio is a copier answer stored in
+`.copier-answers.yml`:
+
+- `include_gsd_docs`, `include_agent_guardrails`, `include_cursor_self_hosted_agent`
+  — platform-layer toggles.
+- `portfolio_groups` (multiselect) — which predefined groups of Parloa repos to
+  include.
+- `extra_repos` (multiline) — freeform list for anything outside the groups.
+- `default_org` (hidden, defaults to `parloa`) — org used when expanding bare
+  repo names; overridable via `--data default_org=other-org`.
+
+`template/ade-repos.txt.jinja` and `template/{{ ade_name }}.code-workspace.jinja`
+are rendered from the same set of macros in `_portfolio.jinja` at the
+template root: `platform_repos()`, `group_repos(group)`, `resolve_url()`,
+`repo_dir()`. The macro file lives at the template root (not under
+`template/`) because Copier's Jinja search path is the template root, not
+`_subdirectory` — files under `template/` can import `_portfolio.jinja` by
+name, and the file itself is never rendered as output because it's outside
+`_subdirectory`. The two generated files are derived artifacts, not
+hand-authored content. On every recopy they match the current answers.
+
+**Group contents:**
+
+| Group | Repos |
+|-------|-------|
+| `core-infra` | `parloa-infra`, `parloa-infra-global`, `parloa-infra-it`, `parloa-infra-pre-stamp`, `parloa-k8s`, `parloa-terraform-modules` |
+| `stamps` | `stamps-catalog`, `stamps-release-channels`, `crossplane-xrd` |
+| `catalog` | `engineering-catalog` |
+| `kitchens` | `claudes-kitchen`, `open-kitchen` |
+| `template-source` | `madi-parloa/ade-template` |
+
+Add a new repo to a group by editing `_portfolio.jinja` at the template root;
+every ADE that includes that group picks it up on the next recopy.
+
+**Why answers and not files:** A text-file-as-source-of-truth (where users edit
+`ade-repos.txt` directly) makes two bugs structurally possible:
+
+1. **Drift.** User edits the file; copier doesn't know about the edit; the file
+   and `.copier-answers.yml` diverge. Future recopies either revert the edit
+   (template wins) or preserve it (merge), and there's no single answer for what
+   "latest template" means on that file.
+2. **Hidden template evolution.** Template adds a default repo. On update, either
+   the user has edited the file (edit wins, template addition never lands) or
+   not (template wins, but the file no longer reflects user intent).
+
+When the portfolio is derived from answers, neither is representable. Answers
+evolve on re-answering; files are always freshly generated; "latest template
+output" is a single, well-defined thing.
+
+**Escape hatches:**
+
+- **Ad-hoc repo without re-answering:** `--data extra_repos="$(cat file)"` on the
+  recopy command passes the list directly, bypassing the prompt.
+- **Ad-hoc org override:** `--data default_org=my-org` changes the org applied to
+  bare repo names for that single recopy.
+
+**Trade-offs:**
+
+- Adding a single repo to this ADE requires re-running recopy without
+  `--skip-answered` and editing the `extra_repos` answer. One command vs. one
+  text-file edit. Acceptable because the recopy also re-validates every other
+  template-owned file and reclones anything the answer change introduced.
+- `portfolio_file` (from earlier versions of the template) is kept as `when: false`
+  in `copier.yml` so older `.copier-answers.yml` files still load without
+  `UnknownQuestionsError`. Its value is ignored by the template. On the first
+  recopy from an older version, the user is prompted for the new questions and
+  the answer file is rewritten with the current shape.
+
+## D-024: Repo-name shorthand DSL
+
+**Decision:** Every repo reference in the portfolio (platform toggles, group
+contents in `_portfolio.jinja` at the template root, `extra_repos` input) is
+a **short name**, resolved to a full git URL at render time by the
+`resolve_url(name)` macro:
+
+| Input | Resolved URL |
+|-------|--------------|
+| `some-repo` | `git@github.com:{{ default_org }}/some-repo.git` (i.e. `parloa/some-repo`) |
+| `parloa/some-repo` | `git@github.com:parloa/some-repo.git` |
+| `madi-parloa/some-repo` | `git@github.com:madi-parloa/some-repo.git` |
+| starts with `git@` / `git+` / contains `://` / ends `.git` | pass-through |
+
+Lines that are empty or start with `#` are ignored. Paths with more than two
+segments (e.g. `org/suborg/repo`) are not supported — they're not a real GitHub
+shape.
+
+The on-disk folder name is derived by `repo_dir(name)`: split on `/`, take the
+last segment, strip trailing `.git`. So `madi-parloa/agent-guardrails` clones
+into `agent-guardrails/`, and `git@github.com:foo/bar.git` clones into `bar/`.
+
+**Why short names:** with 16 repos in the Parloa portfolio and a future where
+users add their own, the full URL is boilerplate. `git@github.com:parloa/`
+appears on every line. Short names keep the `_portfolio.jinja` group
+definitions readable and let `extra_repos` feel like a one-repo-per-line list
+instead of a URL list:
+
+```
+cool-tool
+madi-parloa/scratch
+git@github.com:vendor/vendored-thing.git
+```
+
+...expands to three full URLs at render time, with the default org applied to
+the first line.
+
+**Why a macro, not a shell resolver:** the resolver runs at *render* time, not
+task time. That means `ade-repos.txt` and `<ade>.code-workspace` are both
+derived from the same resolver output in the same render pass, so they cannot
+disagree about what URL or folder name a short entry refers to. A shell-side
+resolver running inside a `_task` would compute the URL later than the workspace
+file rendering, creating a window where the two disagree.
+
+**Why `default_org` is hidden (`when: false`):** for the overwhelming majority
+of ADEs (Parloa-internal), the default `parloa` is correct. Prompting for it
+every scaffold is noise. Users scaffolding outside Parloa override once via
+`--data default_org=other-org`; the answer is stored and every future recopy
+uses it.
+
+**Trade-offs:**
+
+- Users reading `ade-repos.txt` see fully resolved git URLs (they're the target
+  of `git clone`), but users *writing* `extra_repos` or editing
+  `_portfolio.jinja` at the template root see short names. The asymmetry is
+  intentional: `ade-repos.txt` is a machine artifact for the clone loop; the
+  human-facing inputs stay terse.
+- No support for three-segment paths (`org/suborg/repo`). Not a real GitHub shape,
+  rejected to keep the grammar unambiguous.

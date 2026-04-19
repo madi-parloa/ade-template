@@ -1,0 +1,65 @@
+{#-
+  Portfolio resolver macros. See docs/DECISIONS.md D-023 (answer-derived
+  portfolio) and D-024 (short-name DSL).
+
+  Lives at the template root (not in `template/`) because Copier's Jinja
+  search path is the template root, not `_subdirectory`. Files under
+  `template/` can import this file as `_portfolio.jinja`; since it's outside
+  `_subdirectory`, Copier never tries to render it as an output file.
+
+  Consumers import these macros with context so they can see copier
+  answers like default_org / include_gsd_docs / portfolio_groups:
+
+    {% from '_portfolio.jinja' import platform_repos, group_repos, resolve_url, repo_dir with context %}
+
+  Lists in platform_repos() / group_repos() use bare repo names (or
+  'org/repo' for non-default orgs). resolve_url() turns them into full
+  git URLs at render time; repo_dir() derives the on-disk directory name.
+-#}
+
+{%- macro resolve_url(name) -%}
+{%- set s = name | trim -%}
+{%- if not s or s.startswith('#') -%}
+{#- caller filters these; macro intentionally emits nothing -#}
+{%- elif s.startswith('git@') or s.startswith('git+') or '://' in s -%}
+{{- s -}}
+{%- elif '/' in s -%}
+git@github.com:{{ s }}{% if not s.endswith('.git') %}.git{% endif %}
+{%- else -%}
+git@github.com:{{ default_org }}/{{ s }}{% if not s.endswith('.git') %}.git{% endif %}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro repo_dir(name) -%}
+{%- set s = name | trim -%}
+{%- set base = s.split('/')[-1] -%}
+{{- base[:-4] if base.endswith('.git') else base -}}
+{%- endmacro -%}
+
+{%- macro platform_repos() -%}
+{% if include_gsd_docs %}gsd-docs
+{% endif %}{% if include_agent_guardrails %}madi-parloa/agent-guardrails
+{% endif %}{% if include_cursor_self_hosted_agent %}madi-parloa/cursor-self-hosted-agent
+{% endif %}{%- endmacro -%}
+
+{%- macro group_repos(group) -%}
+{%- if group == 'core-infra' -%}
+parloa-infra
+parloa-infra-global
+parloa-infra-it
+parloa-infra-pre-stamp
+parloa-k8s
+parloa-terraform-modules
+{%- elif group == 'stamps' -%}
+stamps-catalog
+stamps-release-channels
+crossplane-xrd
+{%- elif group == 'catalog' -%}
+engineering-catalog
+{%- elif group == 'kitchens' -%}
+claudes-kitchen
+open-kitchen
+{%- elif group == 'template-source' -%}
+madi-parloa/ade-template
+{%- endif -%}
+{%- endmacro -%}

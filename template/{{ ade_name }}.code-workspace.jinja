@@ -1,17 +1,20 @@
-{%- set portfolio_text -%}{% include 'template/ade-repos.txt' %}{%- endset -%}
-{%- set repo_names = [] -%}
-{%- for raw in portfolio_text.splitlines() -%}
-  {%- set line = raw.strip() -%}
-  {%- if line and not line.startswith('#') -%}
-    {%- set base = line.split('/')[-1] -%}
-    {%- if base.endswith('.git') -%}
-      {%- set _ = repo_names.append(base[:-4]) -%}
-    {%- else -%}
-      {%- set _ = repo_names.append(base) -%}
-    {%- endif -%}
-  {%- endif -%}
+{% from '_portfolio.jinja' import platform_repos, group_repos, repo_dir with context -%}
+{%- set names = [] -%}
+{%- for n in platform_repos().splitlines() -%}
+  {%- set s = n | trim -%}
+  {%- if s and not s.startswith('#') -%}{% set _ = names.append(repo_dir(s)) %}{%- endif -%}
 {%- endfor -%}
-{%- set sorted_names = repo_names | sort(case_sensitive=false) -%}
+{%- for g in portfolio_groups | sort -%}
+  {%- for n in group_repos(g).splitlines() -%}
+    {%- set s = n | trim -%}
+    {%- if s and not s.startswith('#') -%}{% set _ = names.append(repo_dir(s)) %}{%- endif -%}
+  {%- endfor -%}
+{%- endfor -%}
+{%- for n in extra_repos.splitlines() -%}
+  {%- set s = n | trim -%}
+  {%- if s and not s.startswith('#') -%}{% set _ = names.append(repo_dir(s)) %}{%- endif -%}
+{%- endfor -%}
+{%- set sorted_names = names | unique | sort(case_sensitive=false) -%}
 {
   "folders": [
     {"name": {{ (ade_name ~ " (root)") | tojson }}, "path": "."}{% if sorted_names %},{% endif %}

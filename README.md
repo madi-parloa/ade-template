@@ -2,17 +2,39 @@
 
 A [Copier](https://copier.readthedocs.io/) template that scaffolds an **ADE (Agent Dev Environment)** — a Cursor workspace with a portfolio of Parloa infrastructure repos, workspace-local GSD, and pre-seeded codebase intelligence.
 
-## Usage
+## Scaffolding a new ADE
 
 ```bash
-# Default Parloa portfolio:
 uvx copier copy --trust git+https://github.com/madi-parloa/ade-template.git ~/path/to/my-ade
-
-# Custom repo list:
-uvx copier copy --trust --data portfolio_file=/path/to/my-repos.txt git+https://github.com/madi-parloa/ade-template.git ~/path/to/my-ade
 ```
 
-Copier prompts for a name and description, renders the template, clones all repos, installs GSD workspace-locally, and opens Cursor.
+Copier prompts for the ADE name, which repo groups to include, which optional integrations to declare, etc. The template then clones every repo in the answer-derived portfolio, installs GSD workspace-locally, commits, and opens Cursor.
+
+### Portfolio questions
+
+| Answer | Type | Default | What it controls |
+|--------|------|---------|------------------|
+| `include_gsd_docs` | bool | `true` | Clone `parloa/gsd-docs` and wire `.planning/` to the shared workspace |
+| `include_agent_guardrails` | bool | `true` | Clone `madi-parloa/agent-guardrails` (clone-only; activate manually) |
+| `include_cursor_self_hosted_agent` | bool | `true` | Clone `madi-parloa/cursor-self-hosted-agent` |
+| `portfolio_groups` | multiselect | all 5 groups | Include `core-infra` / `stamps` / `catalog` / `kitchens` / `template-source` (see D-023 for group contents) |
+| `extra_repos` | multiline | empty | Extra repos to clone, one per line. Short-name DSL (see below) |
+| `default_org` | str, hidden | `parloa` | Default GitHub org for bare repo names; override with `--data default_org=other-org` |
+
+Plus four optional agentic-stack questions (`include_code_graph_mcp`, `include_code_mode_mcp`, `include_letta_memory_mcp`, `include_eval_pipeline`) — docs-only; nothing is auto-installed.
+
+### Short-name DSL
+
+Every repo reference — platform toggles, group contents, `extra_repos` — is a **short name**, resolved to a full git URL at render time:
+
+| Input | Resolved URL | On-disk folder |
+|-------|--------------|----------------|
+| `some-repo` | `git@github.com:parloa/some-repo.git` | `some-repo` |
+| `parloa/some-repo` | `git@github.com:parloa/some-repo.git` | `some-repo` |
+| `madi-parloa/some-repo` | `git@github.com:madi-parloa/some-repo.git` | `some-repo` |
+| `git@...` / `https://...` / `*.git` | pass-through | basename (stripping `.git`) |
+
+Lines starting with `#` or whitespace-only are ignored. See `docs/DECISIONS.md` D-024.
 
 ## What you get
 
@@ -20,9 +42,9 @@ Copier prompts for a name and description, renders the template, clones all repo
 |------|---------|
 | `AGENTS.md` | Agent-level workspace context (includes an "Agentic stack" summary rendered from your Copier answers) |
 | `README.md` | Human orientation |
-| `agentic-stack.md` | Declared defaults + opt-in MCP integrations for this ADE, with the exact `agent-guardrails/install.sh --with=...` command to activate them |
-| `ade-repos.txt` | Git URLs of repos to clone |
-| `<ade_name>.code-workspace` | Multi-root Cursor workspace listing every portfolio repo, with the ADE root at the top and portfolio repos sorted alphabetically (see D-016). Rendered by Copier from `ade-repos.txt` on `copier copy` / `copier update`; opened automatically on first scaffold only. Re-render after editing `ade-repos.txt` with `uvx copier update --trust --skip-answered` |
+| `agentic-stack.md` | Declared defaults + opt-in MCP integrations, with the exact `agent-guardrails/install.sh --with=...` activation command |
+| `ade-repos.txt` | Git URLs of repos to clone. **Generated from copier answers** — do not edit; re-run recopy without `--skip-answered` to change the portfolio |
+| `<ade_name>.code-workspace` | Multi-root Cursor workspace. Root first, portfolio repos alphabetical (D-016). Generated from the same portfolio macros as `ade-repos.txt` |
 | `.planning/PROJECT.md` | GSD project definition |
 | `.planning/codebase/*.md` | Pre-seeded codebase intelligence (7 files) |
 | `.cursor/` | Workspace-local Cursor config (populated by install) |
@@ -31,44 +53,40 @@ Copier prompts for a name and description, renders the template, clones all repo
 
 ```bash
 cd ~/path/to/my-ade
-uvx copier update --trust --skip-answered
+uvx copier recopy --trust --skip-answered --overwrite
 ```
 
-`copier update` is the single entry point. It:
+That's the single entry point. `recopy` re-renders every template-owned file from the current template, so the latest template is what lands on disk. Details:
 
-1. Merges template/docs changes (AGENTS.md, `.planning/codebase/*`, rendered Cursor workspace, and `ade-repos.txt` itself — via 3-way diff, so any repos newly added to the template's default list land automatically while your local edits are preserved; see D-019).
-2. Clones any repos newly added to `ade-repos.txt` (from the merge above, or from your own edits). Already-cloned repos are **not** `git pull`'d — safe even if you have WIP on feature branches.
-3. Refreshes GSD (`npx -y get-shit-done-cc@latest --local --cursor`).
-4. Auto-commits its own output as `chore: copier update to <new_commit>` so the working tree is clean when the command returns (see D-018, D-020).
+- **`--trust`** — required because the template uses `_tasks` (clone loop, GSD install, auto-commit).
+- **`--overwrite`** — required on `recopy`; suppresses the per-file "overwrite?" prompt (recopy is, by definition, "template wins").
+- **`--skip-answered`** — reuses answers from `.copier-answers.yml` for existing questions, but still prompts if a newer template version introduces a new question. Template evolution cannot be silently defaulted away.
 
-**One-command-forever promise (v0.8.4+):** `uvx copier update --trust --skip-answered` requires no pre-work and no post-work. It won't prompt, it won't leave the tree dirty, and the next update is never blocked by a forgotten commit from this one. If copier's 3-way merge produces unresolved conflict markers in any file, the auto-commit is aborted with a loud message and the tree is left dirty for you to resolve — same as pre-v0.8.4 behavior, no regression in the conflict case.
+After recopy returns, `ade-repos.txt` and `<ade_name>.code-workspace` match the latest template, missing repos have been cloned, GSD has been refreshed, and the output is auto-committed as `chore: copier recopy to <hash>` (where `<hash>` is the template commit SHA) so the working tree is clean. If a pre-existing local edit produced a conflict marker (unlikely under `--overwrite`), auto-commit is skipped and the tree is left dirty for manual resolution.
 
-`--skip-answered` suppresses re-prompting for answers already stored in `.copier-answers.yml` (see D-017). Drop it if you want to re-answer questions — typically only needed when adding an optional agentic-stack integration (`include_code_graph_mcp`, etc.), for which `agentic-stack.md` has its own documented command.
+### Changing the portfolio
 
-**`portfolio_file` is a scaffold-only input.** If you passed `--data portfolio_file=...` on `copier copy`, that was a one-time seed of `ade-repos.txt`. After scaffold, `ade-repos.txt` belongs to your ADE's git repo — edit it directly, commit, and the next `copier update` will clone new entries. Re-passing `portfolio_file` on update is a no-op (and before v0.8.5 it would silently break updates when the source file moved). See D-019.
+To add/remove a repo group or freeform extras:
 
-As of **v0.8.3**, portfolio sync and GSD install run **once per update** in the real destination (prior versions re-ran them three times — see D-015). As of **v0.8.4**, the update auto-commits when done; as of **v0.8.5**, the auto-commit runs as an `_migrations` step *after* copier's final merge, so consecutive `copier update` invocations are never blocked by a dirty tree (see D-020).
+```bash
+uvx copier recopy --trust --overwrite
+```
 
-**Pulling existing clones** — if you want to update all already-cloned repos (not just add new ones), run this one-liner yourself. It's deliberately not automatic because `git pull` over a user's WIP is unsafe:
+Omit `--skip-answered` and re-answer `portfolio_groups` / `extra_repos`. Copier presents your stored answers as the prompt defaults, so you only need to edit the ones you want to change.
+
+One-off seeded input (e.g. a large list piped from another tool):
+
+```bash
+uvx copier recopy --trust --overwrite --data extra_repos="$(cat my-repos.txt)"
+```
+
+### Pulling existing clones
+
+`recopy` never `git pull`s existing clones — doing so over WIP is unsafe. To refresh everything:
 
 ```bash
 for d in */; do [ -d "$d/.git" ] && git -C "$d" pull --ff-only; done
 ```
-
-## Customizing
-
-1. **Different repos** — at scaffold time, pass `--data portfolio_file=/path/to/my-repos.txt` to seed `ade-repos.txt` from your own file. After scaffold, `ade-repos.txt` is owned by your ADE — edit it directly and run `uvx copier update --trust --skip-answered` to clone any newly listed repos. The template's own additions to the default list land on the same update via copier's 3-way merge. See D-019.
-2. **Optional agentic integrations** — Copier asks four questions that declare which `agent-guardrails` MCP extensions should be considered active for this ADE:
-
-   | Question | Values | Default | Effect |
-   |----------|--------|---------|--------|
-   | `include_code_graph_mcp` | `none` / `cody` / `augment` | `none` | Cross-repo code-graph retrieval via Sourcegraph Cody (OSS) or Augment (commercial). Highest-ROI optional integration. |
-   | `include_code_mode_mcp` | `true` / `false` | `false` | Python-as-tool-calls (`mcp-code-executor`). Low ROI for Terraform/YAML. |
-   | `include_letta_memory_mcp` | `true` / `false` | `false` | Letta/MemGPT self-editing memory. Requires a running Letta instance. |
-   | `include_eval_pipeline` | `none` / `latitude` / `braintrust` | `none` | Documents a production→eval platform. Docs-only; nothing is installed. |
-
-   Your answers render into `agentic-stack.md` along with the exact `./agent-guardrails/install.sh --with=<csv>` activation command. Nothing is installed automatically — this matches the existing kitchen policy (user/system-level installs are never auto-run). See `docs/DECISIONS.md`.
-3. **Fork this template** — `gh repo fork madi-parloa/ade-template` and scaffold from your fork.
 
 ## Post-install notes
 
@@ -78,3 +96,16 @@ for d in */; do [ -d "$d/.git" ] && git -C "$d" pull --ff-only; done
   bash claudes-kitchen/setup-cooking-environment.sh
   bash open-kitchen/setup-cargo-jfrog.sh  # requires `jf login` first
   ```
+- **agent-guardrails** is cloned when `include_agent_guardrails=true` but `install.sh` is **not** auto-run (same kitchen policy). Activate manually:
+  ```bash
+  ./agent-guardrails/install.sh --with=<csv from agentic-stack.md>
+  ```
+
+## Forking
+
+```bash
+gh repo fork madi-parloa/ade-template --remote
+uvx copier copy --trust git+https://github.com/<you>/ade-template.git ~/path/to/my-ade
+```
+
+See `docs/DECISIONS.md` for the design rationale behind every non-obvious choice.

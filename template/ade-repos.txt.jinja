@@ -1,0 +1,28 @@
+{% from '_portfolio.jinja' import platform_repos, group_repos, resolve_url with context -%}
+# Generated from .copier-answers.yml — do NOT edit.
+#
+# The portfolio is driven by copier answers (portfolio_groups, extra_repos,
+# include_gsd_docs, include_agent_guardrails, include_cursor_self_hosted_agent).
+# Edits to this file are reverted by the next `uvx copier recopy --trust
+# --skip-answered --overwrite`. To change the portfolio, re-run recopy without
+# --skip-answered and re-answer portfolio_groups / extra_repos.
+#
+# See docs/DECISIONS.md D-022 (recopy model) and D-023 (answer-derived portfolio).
+{%- set lines = [] -%}
+{%- for n in platform_repos().splitlines() -%}
+  {%- set s = n | trim -%}
+  {%- if s and not s.startswith('#') -%}{% set _ = lines.append(resolve_url(s)) %}{%- endif -%}
+{%- endfor -%}
+{%- for g in portfolio_groups | sort -%}
+  {%- for n in group_repos(g).splitlines() -%}
+    {%- set s = n | trim -%}
+    {%- if s and not s.startswith('#') -%}{% set _ = lines.append(resolve_url(s)) %}{%- endif -%}
+  {%- endfor -%}
+{%- endfor -%}
+{%- for n in extra_repos.splitlines() -%}
+  {%- set s = n | trim -%}
+  {%- if s and not s.startswith('#') -%}{% set _ = lines.append(resolve_url(s)) %}{%- endif -%}
+{%- endfor %}
+{% for url in lines | unique -%}
+{{ url }}
+{% endfor -%}

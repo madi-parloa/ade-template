@@ -6,9 +6,9 @@
 
 This is an **ADE (Agent Dev Environment)** — a Cursor workspace scaffolded from a [copier template](https://github.com/madi-parloa/ade-template). It contains:
 
-- A portfolio of Parloa infrastructure repos listed in `ade-repos.txt`, cloned by copier `_tasks`. Missing repos are cloned on both `copier copy` and `copier update`; already-cloned repos are never modified (safe for WIP).
-- GSD (Get Shit Done) installed workspace-locally for spec-driven development. Refreshed on every `copier update` (tracks `@latest`).
-- The `claudes-kitchen/` and `open-kitchen/` repos cloned as reference source. Their setup scripts are NOT auto-run — they mutate user/system state (see `claudes-kitchen/setup-cooking-environment.sh`). Run them manually if you want global installation.
+- A portfolio of Parloa infrastructure repos cloned by copier `_tasks` from the answer-derived `ade-repos.txt`. Missing repos are cloned on both `copier copy` and `copier recopy`; already-cloned repos are never modified (safe for WIP).
+- GSD (Get Shit Done) installed workspace-locally for spec-driven development. Refreshed on every `copier recopy` (tracks `@latest`).
+- The `claudes-kitchen/` and `open-kitchen/` repos (when the `kitchens` group is selected) cloned as reference source. Their setup scripts are NOT auto-run — they mutate user/system state (see `claudes-kitchen/setup-cooking-environment.sh`). Run them manually if you want global installation.
 - Pre-seeded codebase intelligence in `.planning/codebase/` so GSD is immediately Parloa-aware.
 {%- if include_gsd_docs %}
 - **gsd-docs** shared planning — `.planning/` is a symlink into `gsd-docs/`, backed by `parloa/gsd-docs` on the `docs` branch. Shared project context + personal implementation plans. See `gsd-docs/README.md`.
@@ -25,34 +25,59 @@ uvx copier copy --trust git+https://github.com/madi-parloa/ade-template.git <thi
 ## Updating
 
 ```bash
-uvx copier update --trust --skip-answered
+uvx copier recopy --trust --skip-answered --overwrite
 ```
 
-Single entry point. Safe to run on a clean tree at any time — no prompts, no manual follow-up. Pulls template/docs changes (AGENTS.md guidance, `.planning/codebase/*` intel, refreshed workspace file) AND:
+Single entry point. Safe to run on a clean tree. `recopy` re-renders every template-owned file from the current template, so the latest template is what lands on disk:
 
-- 3-way merges `ade-repos.txt` — any repos newly added to the template's default list land automatically, and your local edits are preserved;
-- clones any repos newly added to `ade-repos.txt` (from the merge above, or from your own edits); existing repos are untouched — safe for WIP branches;
-- refreshes GSD via `npx -y get-shit-done-cc@latest --local --cursor`;
-- auto-commits its own output as `chore: copier update to <new_commit>` so the working tree is clean when the command returns.
+- **`--trust`** — required (template uses `_tasks`: clone loop, GSD install, auto-commit).
+- **`--overwrite`** — required on `recopy`; suppresses the per-file overwrite prompt ("template wins" is the whole point).
+- **`--skip-answered`** — reuses stored answers for existing questions, but still prompts for any question newly introduced in a later template version — so template evolution surfaces once.
 
-That auto-commit means consecutive updates work with no manual `git commit` in between. If copier's 3-way merge leaves unresolved conflict markers in any file, auto-commit is skipped and the tree is left dirty for you to resolve manually.
+What `recopy` does:
 
-### `portfolio_file` is a scaffold-only input
+- Re-renders every template file (`AGENTS.md`, `CLAUDE.md`, `README.md`, `.planning/codebase/*`, `.gitignore`, `ade-repos.txt`, `<ade>.code-workspace`, `agentic-stack.md`).
+- Clones any repos newly listed in the rendered `ade-repos.txt`; existing repos are untouched (safe for WIP).
+- Refreshes GSD via `npx -y get-shit-done-cc@latest --local --cursor`.
+- Auto-commits everything as `chore: copier recopy to <hash>` (where `<hash>` is the template commit SHA) so the working tree is clean on return.
 
-If this ADE was scaffolded with `--data portfolio_file=...`, that file was a one-time seed for `ade-repos.txt`. After scaffold, `ade-repos.txt` belongs to this repo — edit it directly. `copier update` does **not** re-read `portfolio_file`; re-passing it is a no-op. This keeps `copier update` resilient to the source file being moved or deleted, and lets the template add new default repos without clobbering your list.
+Consecutive recopies work with no manual `git commit` in between. If a conflict marker is somehow present (shouldn't happen under `--overwrite`), auto-commit is skipped and the tree is left for manual resolution.
+
+## Changing the portfolio
+
+`ade-repos.txt` and `<ade>.code-workspace` are generated from your copier answers — edits to those files are reverted on the next `recopy`. To change what repos this ADE includes:
+
+```bash
+uvx copier recopy --trust --overwrite
+```
+
+Omit `--skip-answered` and re-answer `portfolio_groups` and/or `extra_repos`. Your existing answers are the prompt defaults.
+
+For a one-shot seeded input:
+
+```bash
+uvx copier recopy --trust --overwrite --data extra_repos="$(cat my-repos.txt)"
+```
+
+### Repo-name shorthand
+
+`extra_repos` (and the group definitions in the template) use short names:
+
+| You write | Resolved to | Folder |
+|-----------|-------------|--------|
+| `some-repo` | `git@github.com:parloa/some-repo.git` | `some-repo` |
+| `madi-parloa/some-repo` | `git@github.com:madi-parloa/some-repo.git` | `some-repo` |
+| `git@github.com:...` / `https://...` / `*.git` | pass-through | basename (stripping `.git`) |
+
+Blank lines and `#` comments are ignored.
 
 ## Pulling existing clones (optional, manual)
 
-`copier update` never `git pull`s repos you already have — doing so over your own WIP would be unsafe. When you do want to refresh all clones:
+`recopy` never `git pull`s repos you already have — doing so over your own WIP would be unsafe. When you do want to refresh all clones:
 
 ```bash
 for d in */; do [ -d "$d/.git" ] && git -C "$d" pull --ff-only; done
 ```
-
-## Producing a different ADE
-
-1. **Different repos** — edit `ade-repos.txt` directly and run `uvx copier update --trust --skip-answered` to clone any newly listed entries. To seed a fresh ADE from your own list, scaffold a *new* ADE with `--data portfolio_file=/path/to/my-repos.txt` (the input is scaffold-only; see "Updating" above).
-2. **Fork the template** — `gh repo fork madi-parloa/ade-template --remote` and scaffold from your fork.
 
 ## Files
 
@@ -60,7 +85,7 @@ for d in */; do [ -d "$d/.git" ] && git -C "$d" pull --ff-only; done
 |------|---------|
 | `AGENTS.md` | Agent-level workspace context (what repos are here, conventions, guardrails) |
 | `CLAUDE.md` | Claude-specific instructions |
-| `ade-repos.txt` | Git URLs of repos to clone |
+| `ade-repos.txt` | **Generated** git URL list (from `portfolio_groups`, `extra_repos`, `include_*` toggles). Do not edit — edits are reverted on recopy. |
 {% if include_gsd_docs -%}
 | `.planning/` | Symlink into `gsd-docs/` — shared project context + personal plans |
 | `gsd-docs/` | Clone of `parloa/gsd-docs` (`docs` branch) — shared GSD planning |
@@ -68,4 +93,4 @@ for d in */; do [ -d "$d/.git" ] && git -C "$d" pull --ff-only; done
 | `.planning/PROJECT.md` | GSD project definition |
 | `.planning/codebase/*.md` | Pre-seeded codebase intelligence |
 {% endif -%}
-| `.cursor/` | Workspace-local Cursor config (populated by copier `_tasks` / GSD, refreshed on every `copier update`) |
+| `.cursor/` | Workspace-local Cursor config (populated by copier `_tasks` / GSD, refreshed on every `copier recopy`) |

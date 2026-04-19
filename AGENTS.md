@@ -4,53 +4,70 @@ This is a Copier template repo, not a runtime project. It scaffolds Agent Dev En
 
 ## Repo structure
 
-- `copier.yml` — Copier configuration: questions, `_tasks`, `_subdirectory` setting
+- `copier.yml` — Copier configuration: questions, `_tasks`, `_subdirectory`, `_skip_if_exists`, `_exclude`
+- `_portfolio.jinja` — Jinja macros (`platform_repos`, `group_repos`, `resolve_url`, `repo_dir`) that turn copier answers into the final repo set. Lives at the template root so Jinja imports can find it; excluded from rendering by `_exclude: ["_*.jinja"]`. See D-022 and D-023.
 - `README.md` — GitHub landing page
 - `docs/DESIGN.md` — Full design document with motivation and architecture
-- `docs/DECISIONS.md` — Decision log (D-001 through D-021) with context for every choice
+- `docs/DECISIONS.md` — Decision log with context for every non-obvious choice
 - `template/` — Everything copier renders into an ADE:
   - `.jinja` files are rendered with variable substitution (suffix stripped in output)
   - Non-`.jinja` files are copied verbatim
-  - Portfolio sync and GSD workspace-local install are driven by copier `_tasks` in `copier.yml` (not a separate shell script). Both run on `copier copy` AND `copier update` — sync is clone-if-missing (never pulls existing repos), and GSD install tracks `@latest`. On `copier update` they run **once per invocation** (in the real destination) — each task guards itself with a `$PWD` check that skips copier's internal temp render dirs; see D-015. The `portfolio_file` seed, `git init`, and Cursor launch are all guarded to first-scaffold-only via `when: "{{ _copier_operation == 'copy' }}"`; the `portfolio_file` seed is scaffold-only because re-applying it on update broke updates when the source file was gone and clobbered template additions — see D-019. An **`_migrations`** entry (not a `_task`) with `when: "{{ _stage == 'after' }}"` writes a `chore: copier update to <_version_to>` commit after copier applies its final diff, so the working tree is always clean after a successful update — see D-018 and D-020. Kitchen setup scripts (`claudes-kitchen`, `open-kitchen`) are deliberately NOT run — see `docs/DECISIONS.md` D-013. See D-007, D-009, D-015, D-018, D-019, and D-020 for the full `_tasks` / `_migrations` policy and its evolution.
-  - `ade-repos.txt` lists the default repo portfolio (includes `gsd-docs`)
+  - `ade-repos.txt.jinja` and `{{ ade_name }}.code-workspace.jinja` are generated from the macros in `_portfolio.jinja` — they are not user-editable artifacts. See D-023.
   - `.gitignore.jinja` renders a conditional gitignore: when `include_gsd_docs` is true, ignores the `.planning` symlink; when false, allowlists `.planning/` as a real directory — see D-014 and D-021
   - `.planning/codebase/*.md` are pre-seeded GSD intel files (migrated into gsd-docs on scaffold when enabled)
-  - `copier.yml` Task 4 runs `gsd-docs/bin/onboard.sh` to wire the symlink, agent adapters, and pre-push hook — gated on `include_gsd_docs` (default true) — see D-021
+
+## Update model
+
+The prescribed update command is:
+
+```bash
+uvx copier recopy --trust --skip-answered --overwrite
+```
+
+`copier recopy` re-applies the current template fresh (no 3-way merge), so whatever is in the latest template is what lands on disk. Combined with `_skip_if_exists: []`, every template-owned file is overwritten on every recopy — no drift. See D-022.
+
+`copier update` (3-way merge) is not the prescribed path. It works if invoked, but recopy is what the scaffolded README and docs point users at, because the portfolio (ade-repos.txt, code-workspace) is fully derived from answers — there's nothing to merge.
+
+## `_tasks` semantics
+
+`_tasks` fire during BOTH `copier copy` and `copier recopy` (copier sets `_copier_operation` to `'copy'` for both — `recopy` is implemented as `run_copy` under the hood; see D-022). Three orthogonal gating mechanisms compose per task:
+
+- **On-disk state detection** (`.git/` presence check) distinguishes "first scaffold" from "re-apply". The consolidated finalize task uses this: no `.git/` → `git init` + `ADE scaffold` commit + open Cursor; `.git/` exists → conflict-marker check, then auto-commit as `chore: copier recopy to <hash>`. See D-022.
+- **`case "$PWD" in */copier._main.*) exit 0 ;; esac`** at the top of every task body skips copier's internal temp render dirs (`copier._main.*`) and lets the task run only in the real destination. Every `_task` is pwd-gated.
+- **`when: "{{ include_gsd_docs }}"`** and similar Jinja conditions gate tasks on copier answers (e.g. the gsd-docs onboard task only fires when the user opted in).
+
+## Portfolio model
+
+`ade-repos.txt` and `<ade>.code-workspace` are **generated** from copier answers:
+
+- `include_gsd_docs`, `include_agent_guardrails`, `include_cursor_self_hosted_agent` (booleans) gate platform-level repos.
+- `portfolio_groups` (multiselect) pulls in fixed sets: `core-infra`, `stamps`, `catalog`, `kitchens`, `template-source`.
+- `extra_repos` (multiline free-text) adds user-specified repos.
+- `default_org` (hidden, default `parloa`) lets bare `some-repo` names resolve to `parloa/some-repo` automatically. Override with `--data default_org=other-org` for non-Parloa scaffolds.
+
+Short-name DSL (D-024): `some-repo` → `git@github.com:parloa/some-repo.git`; `org/some-repo` → `git@github.com:org/some-repo.git`; full URLs pass through.
+
+Changing the portfolio post-scaffold: `uvx copier recopy --trust --overwrite` (without `--skip-answered`) re-prompts for `portfolio_groups` and `extra_repos`, using current answers as defaults.
 
 ## Working on this repo
 
 - Read `docs/DESIGN.md` before making changes — it explains why things are the way they are.
-- Read `docs/DECISIONS.md` for specific decision context (e.g., why tasks are guarded by `_copier_operation`).
-- **When to tag:** Create a new git tag (e.g., `v0.5.1`) when you change anything inside `template/` or `copier.yml` — these affect what copier scaffolds. Copier resolves the latest tag to determine the template version; without a new tag, `copier update` won't see the change.
-- **When NOT to tag:** Changes to `README.md`, `AGENTS.md`, or `docs/` at the repo root do NOT need a tag — they are not part of the copier template output.
-- **Before tagging, run `bash test.sh`.** It exercises both `copier copy` and `copier update` against the working tree with stubbed `open` / `npx` (so Cursor doesn't launch and GSD doesn't install). If it fails, do NOT tag — a broken tag makes `copier update` unrecoverable on any ADE that lands on it as a baseline (see `docs/DECISIONS.md` D-012).
-- Why this matters: Jinja include paths, `_tasks` semantics, and ordering between render and tasks are all easy to get wrong in ways that pass local mental dry-runs but fail at real `copier copy` / `update` time. The test catches this class of bug.
-
-## Keeping an ADE up to date
-
-`uvx copier update --trust --skip-answered` is the **single entry point** for keeping an ADE current with the template. From v0.8.4 onward it is a true one-command operation:
-
-- Refreshes template-managed files (AGENTS.md, `.planning/codebase/*`, rendered Cursor workspace, etc.) via smart 3-way merge.
-- Re-runs portfolio sync + GSD install, **once per invocation** thanks to the pwd gate (D-015). New repos in `ade-repos.txt` are cloned; existing repos are never `git pull`'d (clone-if-missing only — safe even when user has WIP on feature branches, see D-007).
-- **Auto-commits its own output** as `chore: copier update to <_version_to>` at the end of every successful update. Implemented as an `_migrations` entry (fires *after* copier's post-task diff-apply), not as a `_task`. This means the working tree is always clean after `copier update`, and the next `copier update` is never blocked by a forgotten manual commit. If the 3-way merge produces unresolved conflict markers, auto-commit is aborted loudly and the tree is left dirty for manual resolution — same failure mode as before, no regression. See D-018 (safety analysis) and D-020 (why `_migrations` instead of `_tasks`).
-- Suppresses re-prompting via `--skip-answered` (D-017). New questions added in future template versions still prompt.
-
-Users who want to re-answer a specific question (e.g., to enable an optional agentic-stack MCP) follow the separate instructions in `agentic-stack.md`, which deliberately uses plain `--trust` without `--skip-answered`.
-
-Users wanting to pull existing clones run the one-liner in the scaffolded `README.md` themselves. Kitchen setup scripts are never run, per D-013.
+- Read `docs/DECISIONS.md` for specific decision context.
+- **When to tag:** Create a new git tag (e.g., `v0.9.1`) when you change anything inside `template/`, `_portfolio.jinja`, or `copier.yml` — these affect what copier scaffolds. Copier resolves the latest tag to determine the template version; without a new tag, `copier recopy` won't see the change.
+- **When NOT to tag:** Changes to `README.md`, `AGENTS.md`, `CLAUDE.md`, or `docs/` at the repo root do NOT need a tag — they are not part of the copier template output.
+- **Before tagging, run `bash test.sh`.** It exercises `copier copy` and `copier recopy` scenarios (initial scaffold, recopy picks up new repo, no-op recopy, template-wins, partial selection, short-name DSL) against the working tree with stubbed `open` / `npx` / `git clone` (network URLs only — local paths pass through so copier can clone the local template source). If it fails, do NOT tag — a broken tag makes `copier recopy` unrecoverable on any ADE that lands on it as a baseline (see D-012).
 
 ## Editing template files
 
 - Files under `template/` with `.jinja` suffix are Jinja2 templates. Variables like `{{ ade_name }}` and `{{ description }}` come from `copier.yml` questions. The suffix is stripped in output.
 - Files without `.jinja` are copied verbatim.
 - `{{_copier_conf.answers_file}}.jinja` is a special copier file that generates `.copier-answers.yml` — do not rename or remove it. See D-008.
+- To import `_portfolio.jinja` macros from a template file, use `{% from '_portfolio.jinja' import ... with context %}` — the `with context` is required for the macros to see top-level answers like `default_org`.
 
 ## Editing copier.yml
 
 - `_tasks` run in the output directory, not in this repo.
-- `_tasks` fire during BOTH `copier copy` AND `copier update`. On update, copier's three-way-merge algorithm invokes `_tasks` **three times** (old-baseline temp render, new-target temp render, real destination). Three orthogonal gating mechanisms are available and compose per task:
-  - **`when: "{{ _copier_operation == 'copy' }}"`** restricts a task to first-scaffold only. Used for the `portfolio_file` seed (D-019 — updates should not re-apply this), `git init` (no `.git/` exists in copier's temp dirs — `git add -A` would fail), and Cursor launch (don't re-launch on every update). See D-004, D-009, D-019.
-  - **`_migrations` with `when: "{{ _stage == 'after' }}"`** restricts a step to the end of `copier update`, after copier's `git apply --reject` diff restoration step. Used for the auto-commit — `_tasks` run too early (during the inner copy pass), so a `_task`-based auto-commit would capture a transient pre-merge state and immediately be overwritten when copier re-applies user divergence. `_migrations` "after" is the only stage that sees the true post-update tree. See D-020.
-  - **`case "$PWD" in */copier._main.*) exit 0 ;; esac`** at the top of the task body skips copier's two temp render dirs and lets the task run only in the real destination. Used for portfolio sync and GSD install — both must run on update (to propagate new repos / refresh GSD) but should run **once**, not three times. See D-015. The pwd substring `copier._main.` is the naming convention copier uses for its internal temp render dirs; treat it as a contract that may need revisiting if a future copier release changes it.
-- Quote all Jinja variables interpolated into shell commands: `cp "{{ portfolio_file }}"` not `cp {{ portfolio_file }}`.
-- `copier update` requires the destination to be a git repo. The template's `_tasks` handle `git init` on first scaffold. See D-004.
+- Every `_task` body must start with the `*/copier._main.*) exit 0` pwd gate — without it, the task runs in copier's temp render dirs as well.
+- Quote all Jinja variables interpolated into shell commands.
+- `_skip_if_exists: []` is intentional — it's the mechanism that enforces "template wins" on recopy.
+- `_exclude` keeps `_*.jinja` files (including `_portfolio.jinja`) from being rendered into the output; they're for internal Jinja imports only.

@@ -10,6 +10,7 @@ Read `AGENTS.md` for the full workspace contract. This file adds Claude-specific
 - Use GSD commands (`/gsd-plan-phase`, `/gsd-execute-phase`, `/gsd-verify-work`, etc.) for structured work.
 - Consult `.planning/codebase/` for pre-analyzed codebase intelligence before reasoning about architecture.
 - Do not assume repos are one unified system — they are a portfolio. See `.planning/codebase/ARCHITECTURE.md`.
+- Do not hand-edit `ade-repos.txt` or `{{ ade_name }}.code-workspace` — both are rendered from `.copier-answers.yml`. To refresh this ADE, run `uvx copier recopy --trust --skip-answered --overwrite`; to change the portfolio, drop `--skip-answered` and re-answer `portfolio_groups` / `extra_repos`.
 {% if include_gsd_docs -%}
 - `.planning/` is a symlink into `gsd-docs/`. Commit planning changes in `gsd-docs/` (push to `docs` branch), code changes per-repo.
 {% endif -%}
