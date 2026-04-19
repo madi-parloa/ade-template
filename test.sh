@@ -4,10 +4,10 @@
 # Exercises the recopy model (see docs/DECISIONS.md D-022, D-023, D-024, D-026):
 #   - defaults scaffold + auto-commit
 #   - recopy clones new repos added via template bump
-#   - no-op recopy produces no new commits
-#   - .planning/PROJECT.md symlink into gsd-docs survives recopy (D-026)
+#   - no-op recopy produces no new commits, no PROJECT.md line at all (D-026)
+#   - .planning/PROJECT.md symlink into gsd-docs survives recopy silently (D-026)
 #   - local edits to generated files (ade-repos.txt, workspace) are reverted on recopy
-#   - partial selection (some toggles / groups off)
+#   - partial selection (some toggles / groups off, PROJECT.md rendered locally)
 #   - short-name DSL resolves correctly for bare / org-prefixed / full-URL inputs
 #
 # Stubs `open`, `npx`, and `git clone` so the test runs offline. Tests the
@@ -303,12 +303,21 @@ echo "==> [3/7] Re-running recopy at the same version must be a no-op..."
 # Capture recopy stdout/stderr so we can assert that no template-owned file is
 # flagged 'conflict' or 'overwrite'. D-025: sentinel-bearing files (CLAUDE.md,
 # AGENTS.md) must render byte-identically to disk, not show as conflicts.
+# D-026: .planning/PROJECT.md must not appear in copier output at all when
+# include_gsd_docs=true — the conditional-filename pattern means copier
+# generates no output for that path, so no identical/conflict/skip line.
 recopy_out="$SCRATCH/recopy-noop.log"
 uvx copier recopy --trust --skip-answered --overwrite --defaults \
   --data gsd_docs_handle=testuser 2>&1 | tee "$recopy_out"
-if grep -E '(conflict|overwrite)[[:space:]]+(CLAUDE\.md|AGENTS\.md)' "$recopy_out"; then
+recopy_plain="$(sed 's/\x1b\[[0-9;]*m//g' "$recopy_out")"
+if echo "$recopy_plain" | grep -E '(conflict|overwrite)[[:space:]]+(CLAUDE\.md|AGENTS\.md)'; then
   echo "FAIL: no-op recopy flagged CLAUDE.md or AGENTS.md as conflict/overwrite" >&2
   echo "      template render must match disk bytes (see D-025)" >&2
+  exit 1
+fi
+if echo "$recopy_plain" | grep -E '\.planning/PROJECT\.md'; then
+  echo "FAIL: no-op recopy emitted a line for .planning/PROJECT.md" >&2
+  echo "      with include_gsd_docs=true that path must be fully excluded (see D-026)" >&2
   exit 1
 fi
 commit_count_after="$("$REAL_GIT" rev-list --count HEAD)"
@@ -325,27 +334,46 @@ fi
 echo "  ok: no-op recopy produced 0 new commits, clean tree"
 
 # ----------------------------------------------------------------------------
-# Scenario 4: .planning/PROJECT.md symlink survives recopy (D-026).
-# Once gsd-docs onboarding replaces the local PROJECT.md with a symlink into
-# shared storage, subsequent recopies MUST NOT clobber the symlink — that
-# would show as a typechange in the gsd-docs repo and overwrite the shared
-# project's PROJECT.md on every recopy. copier.yml's _skip_if_exists entry
-# (gated on include_gsd_docs) makes copier skip that one path when it exists.
-# .planning/ is gitignored when gsd-docs is on (D-014), so this test asserts
-# filesystem state directly — which mirrors reality: the typechange in the
-# real setup lands in the gsd-docs repo, not the ade repo.
+# Scenario 4: .planning/PROJECT.md symlink survives recopy silently (D-026).
+#
+# When include_gsd_docs=true, the template's conditional-filename file
+# `.planning/{% if not include_gsd_docs %}PROJECT.md{% endif %}.jinja` renders
+# to nothing — copier does not emit any line for `.planning/PROJECT.md` and
+# does not touch the path on disk. Ownership of PROJECT.md is fully with
+# gsd-docs/bin/new-project.sh.
+#
+# This scenario simulates the post-onboarding state (regular-file PROJECT.md
+# migrated into shared storage, local path replaced with a symlink into that
+# shared file) and asserts:
+#   - the symlink stays a symlink with unchanged target
+#   - the shared target content is unchanged (marker survives)
+#   - copier's output contains NO line mentioning `.planning/PROJECT.md`
+#     (no identical / conflict / skip / overwrite — nothing)
+#   - no auto-commit fires
 # ----------------------------------------------------------------------------
 echo ""
-echo "==> [4/7] .planning/PROJECT.md symlink survives recopy (D-026)..."
+echo "==> [4/7] .planning/PROJECT.md symlink survives recopy silently (D-026)..."
 
 SIM_SHARED="$SCRATCH/sim-shared"
 mkdir -p "$SIM_SHARED"
-mv "$TEST_ADE/.planning/PROJECT.md" "$SIM_SHARED/PROJECT.md"
-ln -s "$SIM_SHARED/PROJECT.md" "$TEST_ADE/.planning/PROJECT.md"
-
-# Put a unique marker in the shared target so we can detect any clobber.
+# Seed a shared PROJECT.md with a unique marker line. Scenario 1 ran with
+# include_gsd_docs=true, so .planning/PROJECT.md was NOT rendered by the
+# template — there is nothing to `mv`. Create the shared file from scratch
+# to mirror what new-project.sh would have authored in production.
 MARKER="# MARKER:shared-gsd-docs-content-do-not-overwrite"
-echo "$MARKER" >> "$SIM_SHARED/PROJECT.md"
+cat > "$SIM_SHARED/PROJECT.md" <<EOF
+# test-ade
+
+## Purpose
+
+Simulated shared PROJECT.md for D-026 test.
+
+$MARKER
+EOF
+# Replace any local PROJECT.md (whether regular file or absent) with a
+# symlink into the simulated shared storage.
+rm -f "$TEST_ADE/.planning/PROJECT.md"
+ln -s "$SIM_SHARED/PROJECT.md" "$TEST_ADE/.planning/PROJECT.md"
 
 cd "$TEST_ADE"
 commits_before_symlink_recopy="$("$REAL_GIT" rev-list --count HEAD)"
@@ -353,7 +381,7 @@ recopy_out="$SCRATCH/recopy-symlink.log"
 uvx copier recopy --trust --skip-answered --overwrite --defaults \
   --data gsd_docs_handle=testuser 2>&1 | tee "$recopy_out"
 
-# The symlink itself must still be a symlink (lstat, not stat).
+# Symlink must survive (lstat, not stat).
 if [ ! -L "$TEST_ADE/.planning/PROJECT.md" ]; then
   echo "FAIL: .planning/PROJECT.md is no longer a symlink after recopy (D-026)" >&2
   ls -la "$TEST_ADE/.planning/PROJECT.md" >&2
@@ -369,17 +397,14 @@ if ! grep -qxF "$MARKER" "$SIM_SHARED/PROJECT.md"; then
   cat "$SIM_SHARED/PROJECT.md" >&2
   exit 1
 fi
-# Strip ANSI escape codes so the regex doesn't get fooled by copier's coloring.
+# Copier output must contain no mention of .planning/PROJECT.md at all — not
+# 'identical', not 'conflict', not 'skip', not 'overwrite'. With the
+# conditional-filename pattern the path is fully excluded from the render.
 recopy_plain="$(sed 's/\x1b\[[0-9;]*m//g' "$recopy_out")"
-# copier must not WRITE the file. 'overwrite .planning/PROJECT.md' is the
-# signal that _skip_if_exists failed. 'conflict' followed by 'skip' is
-# expected: copier notices the divergence, _skip_if_exists honors it, no write.
-if echo "$recopy_plain" | grep -qE 'overwrite[[:space:]]+\.planning/PROJECT\.md'; then
-  echo "FAIL: recopy overwrote .planning/PROJECT.md (_skip_if_exists not honored)" >&2
-  exit 1
-fi
-if ! echo "$recopy_plain" | grep -qE 'skip[[:space:]]+\.planning/PROJECT\.md'; then
-  echo "FAIL: copier did not emit 'skip' for .planning/PROJECT.md — is _skip_if_exists wired up?" >&2
+if echo "$recopy_plain" | grep -qE '\.planning/PROJECT\.md'; then
+  echo "FAIL: copier emitted a line for .planning/PROJECT.md — conditional-filename exclusion is broken (D-026)" >&2
+  echo "      offending lines:" >&2
+  echo "$recopy_plain" | grep -E '\.planning/PROJECT\.md' >&2
   exit 1
 fi
 commits_after_symlink_recopy="$("$REAL_GIT" rev-list --count HEAD)"
@@ -393,7 +418,7 @@ if ! "$REAL_GIT" diff --quiet || ! "$REAL_GIT" diff --cached --quiet; then
   "$REAL_GIT" status --short >&2
   exit 1
 fi
-echo "  ok: PROJECT.md symlink preserved, shared content intact, 0 new commits"
+echo "  ok: PROJECT.md symlink preserved, shared content intact, no PROJECT.md line, 0 new commits"
 
 # ----------------------------------------------------------------------------
 # Scenario 5: template wins — local edits to generated files are reverted.
@@ -489,7 +514,27 @@ if [ -L "$TEST_ADE_PARTIAL/.planning" ]; then
   echo "FAIL: .planning is a symlink with include_gsd_docs=false" >&2
   exit 1
 fi
-echo "  ok: partial selection portfolio correct, gsd-docs content omitted, .planning/ local"
+# D-026 (gsd-docs=false path): the conditional-filename template
+# `.planning/{% if not include_gsd_docs %}PROJECT.md{% endif %}.jinja` must
+# render as a regular PROJECT.md file here — when gsd-docs is off the
+# template is the sole author of PROJECT.md. Also guard against copier
+# generating a stray empty `.jinja` file (which would mean the conditional
+# evaluated but the filename wasn't skipped).
+if [ ! -f "$TEST_ADE_PARTIAL/.planning/PROJECT.md" ] || [ -L "$TEST_ADE_PARTIAL/.planning/PROJECT.md" ]; then
+  echo "FAIL: .planning/PROJECT.md missing or not a regular file with include_gsd_docs=false (D-026)" >&2
+  ls -la "$TEST_ADE_PARTIAL/.planning/" >&2
+  exit 1
+fi
+if ! grep -qF '# test-partial' "$TEST_ADE_PARTIAL/.planning/PROJECT.md"; then
+  echo "FAIL: .planning/PROJECT.md did not render ade_name heading" >&2
+  exit 1
+fi
+if [ -e "$TEST_ADE_PARTIAL/.planning/.jinja" ]; then
+  echo "FAIL: stray '.jinja' entry in .planning/ — conditional-filename rendering is off" >&2
+  ls -la "$TEST_ADE_PARTIAL/.planning/" >&2
+  exit 1
+fi
+echo "  ok: partial selection portfolio correct, gsd-docs content omitted, .planning/ local, PROJECT.md rendered"
 
 # ----------------------------------------------------------------------------
 # Scenario 7: short-name DSL in extra_repos resolves all three shapes.

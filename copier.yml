@@ -18,16 +18,16 @@ _exclude:
   - .DS_Store
   - .svn
 
-# Template-owned files are re-rendered on `copier recopy`; that's the whole
-# point of the recopy model. The one exception is `.planning/PROJECT.md`
-# when gsd-docs is enabled: ownership of PROJECT.md transfers to gsd-docs
-# after the initial scaffold (gsd-docs/bin/new-project.sh migrates it to
-# shared storage and replaces the local file with a symlink into the
-# shared project). On subsequent recopies the template treats PROJECT.md
-# as opaque — writing it would clobber the symlink (typechange) and
-# overwrite shared content every run. See docs/DECISIONS.md D-022, D-026.
-_skip_if_exists:
-  - "{% if include_gsd_docs %}.planning/PROJECT.md{% endif %}"
+# PROJECT.md ownership:
+#   `template/.planning/{% if not include_gsd_docs %}PROJECT.md{% endif %}.jinja`
+# is a conditional-filename file (copier idiom, see D-026). When
+# include_gsd_docs=true it renders to an empty filename and copier generates
+# nothing at all for .planning/PROJECT.md — no `conflict`/`skip`/`overwrite`
+# lines in recopy output. gsd-docs/bin/new-project.sh is then the sole
+# author of PROJECT.md in shared storage. When include_gsd_docs=false the
+# template renders PROJECT.md normally. This is why there is no
+# `_skip_if_exists` entry for PROJECT.md — it would only be needed if the
+# file were still rendered.
 
 _tasks:
   # Task 1: clone every URL in ade-repos.txt (missing only; existing repos are
@@ -112,8 +112,17 @@ _tasks:
           exit 0
         fi
         echo "==> Onboarding workspace into gsd-docs..."
-        if [ -d .planning ] && [ ! -L .planning ]; then
-          gsd-docs/bin/new-project.sh --shared "{{ ade_name }}" --workspace "$PWD"
+        # new-project.sh sets up shared storage, authors PROJECT.md from
+        # --description if missing, and replaces local .planning/ with a
+        # symlink. Runs when .planning is still a regular dir (initial
+        # scaffold) or absent entirely (gsd-docs-only workspace). When
+        # .planning is already a symlink (post-onboarding recopy), skip —
+        # the setup is already done.
+        if [ ! -L .planning ]; then
+          gsd-docs/bin/new-project.sh \
+            --shared "{{ ade_name }}" \
+            --workspace "$PWD" \
+            --description "{{ description }}"
         fi
         gsd-docs/bin/onboard.sh --workspace "$PWD"
     when: "{{ include_gsd_docs }}"

@@ -46,7 +46,7 @@ Lines starting with `#` or whitespace-only are ignored. See `docs/DECISIONS.md` 
 | `agentic-stack.md` | Declared defaults + opt-in MCP integrations, with the exact `agent-guardrails/install.sh --with=...` activation command |
 | `ade-repos.txt` | Git URLs of repos to clone. **Generated from copier answers** — do not edit; re-run recopy without `--skip-answered` to change the portfolio |
 | `<ade_name>.code-workspace` | Multi-root Cursor workspace. Root first, portfolio repos alphabetical (D-016). Generated from the same portfolio macros as `ade-repos.txt` |
-| `.planning/PROJECT.md` | GSD project definition. Written on initial scaffold; preserved unchanged on recopy when `include_gsd_docs=true` (ownership transfers to gsd-docs shared storage, see D-026) |
+| `.planning/PROJECT.md` | GSD project definition. When `include_gsd_docs=true` (default) the template does not render this file at all — `gsd-docs/bin/new-project.sh` authors it in shared storage on initial scaffold and `recopy` never touches it again. When `include_gsd_docs=false` the template owns it (rendered from `ade_name`/`description` each recopy). See D-026 |
 | `.planning/codebase/*.md` | Pre-seeded codebase intelligence (7 files) |
 | `.cursor/` | Workspace-local Cursor config (populated by install) |
 

@@ -206,19 +206,25 @@ runs to create the `.planning/` symlink, install agent adapters, and set up the
 
 **What happens on scaffold (`copier copy`) with `include_gsd_docs=true`:**
 
-1. Task 2 clones `gsd-docs` with `-b docs` (all other repos use default branch).
-2. Task 4 runs `gsd-docs/bin/new-project.sh` — migrates the template-seeded
-   `.planning/` content (PROJECT.md, codebase intel) into
-   `gsd-docs/projects/<ade_name>/` and replaces the local directory with a symlink.
-3. Task 4 then runs `gsd-docs/bin/onboard.sh --workspace "$PWD"` — installs
+1. Task 1 clones every URL in `ade-repos.txt`, including `gsd-docs` (which
+   uses `-b docs`; all other repos use default branch).
+2. Task 3 runs `gsd-docs/bin/new-project.sh --shared <ade_name> --workspace
+   $PWD --description <description>` — creates the shared project at
+   `gsd-docs/projects/<ade_name>/`, migrates any existing `.planning/`
+   codebase intel into it, authors a starter `PROJECT.md` in shared storage
+   (from `--description`), and replaces the local `.planning/` directory
+   with a symlink into gsd-docs. PROJECT.md is intentionally NOT rendered
+   by the template when gsd-docs is on — see D-026.
+3. Task 3 then runs `gsd-docs/bin/onboard.sh --workspace "$PWD"` — installs
    agent adapters (Cursor rule, CLAUDE.md/AGENTS.md sentinel blocks) and the
    `pre-push` hook inside `gsd-docs/.git/hooks/`.
 
 **What happens with `include_gsd_docs=false`:**
 
 1. `gsd-docs` is still cloned (available for manual onboarding later).
-2. Task 4 is skipped (`when: "{{ include_gsd_docs }}"`).
-3. `.planning/` remains a real directory tracked in the ADE repo.
+2. Task 3 is skipped (`when: "{{ include_gsd_docs }}"`).
+3. `.planning/` remains a real directory tracked in the ADE repo, including
+   a template-rendered `PROJECT.md` (D-026).
 4. Template docs (AGENTS.md, CLAUDE.md, README.md) omit gsd-docs sections via
    Jinja conditionals.
 
@@ -231,9 +237,13 @@ runs to create the `.planning/` symlink, install agent adapters, and set up the
   wrapped in `{% if include_gsd_docs %}`.
 - `CLAUDE.md.jinja`: symlink/commit note wrapped in `{% if include_gsd_docs %}`.
 - `README.md.jinja`: "What is this?" bullet and Files table conditional on toggle.
-- `copier.yml`: new question + Task 4 with `when:` guard.
-- `.planning/` seed content kept in template — `new-project.sh` migrates it on
-  first scaffold; it's the fallback when gsd-docs is disabled.
+- `copier.yml`: new question + Task 3 with `when:` guard.
+- `.planning/codebase/` seed content kept in template — `new-project.sh`
+  migrates it into shared storage on first scaffold.
+- `.planning/{% if not include_gsd_docs %}PROJECT.md{% endif %}.jinja`:
+  conditional-filename template (D-026). Renders to `PROJECT.md` only when
+  gsd-docs is off; otherwise copier generates nothing and `new-project.sh`
+  authors the file in shared storage.
 
 **Why always clone, optionally onboard:** Engineers who initially skip gsd-docs
 can manually run `gsd-docs/bin/onboard.sh --workspace .` later without
@@ -254,10 +264,13 @@ uvx copier recopy --trust --skip-answered --overwrite
 
 `recopy` re-renders every template-owned file from the current template and writes
 the result into the destination. It does not perform copier's structural 3-way
-merge. `_skip_if_exists` is empty, so no file is protected from re-render. The
-resulting contract is: **whatever the latest template version renders is what's
-on disk after the command returns.** No file drifts, nothing is quietly preserved
-from an earlier template version.
+merge. `_skip_if_exists` is not declared at all in `copier.yml`, so copier's
+write-skip list is empty and no file is protected from re-render. The ownership
+exception for `.planning/PROJECT.md` when gsd-docs is enabled is implemented via
+a conditional filename that removes the path from the render entirely — see
+D-026. The resulting contract is: **whatever the latest template version renders
+is what's on disk after the command returns.** No file drifts, nothing is quietly
+preserved from an earlier template version.
 
 **Flag anatomy:**
 
@@ -521,59 +534,78 @@ alternative (parsing `gsd-docs/.gsd-docs-user` inside a `_task` and having
 it rewrite the template output) would put the render under two owners
 again — exactly what this decision removes.
 
-## D-026: Template hands `PROJECT.md` ownership to gsd-docs after scaffold
+## D-026: gsd-docs owns `PROJECT.md` end-to-end via conditional filename
 
-**Decision:** `copier.yml` declares a single-entry `_skip_if_exists`, gated on
-`include_gsd_docs`, covering `.planning/PROJECT.md`. The template writes this
-file once — during the initial `copier copy` — and every `copier recopy`
-after that leaves it alone if it exists.
+**Decision:** When `include_gsd_docs=true`, the template does not render
+`.planning/PROJECT.md` at all — copier emits no output line for that path,
+and `gsd-docs/bin/new-project.sh` is the sole author of the file. Ownership
+never transfers because the template never took it.
 
-**Context:** On the initial scaffold, `template/.planning/PROJECT.md.jinja`
-renders `.planning/PROJECT.md` with the user's `ade_name` and `description`.
-When `include_gsd_docs=true`, `_task` 3 runs `gsd-docs/bin/new-project.sh`,
-which moves the file into shared gsd-docs storage at
-`gsd-docs/projects/<ade_name>/PROJECT.md` and replaces the local path with a
-symlink chain:
+The mechanism is [copier's conditional-filename pattern][copier-cond]:
+
+    template/.planning/{% if not include_gsd_docs %}PROJECT.md{% endif %}.jinja
+
+When `include_gsd_docs=false` the path renders to `.planning/PROJECT.md.jinja`
+→ `.planning/PROJECT.md` and the template owns it normally (D-022 applies).
+When `include_gsd_docs=true` the filename renders to `.planning/.jinja`,
+copier recognises the empty basename and generates nothing.
+
+[copier-cond]: https://copier.readthedocs.io/en/stable/configuring/#conditional-files-and-directories
+
+**Context:** Onboarding replaces the local path with a symlink chain into
+shared storage:
 
     <workspace>/.planning/PROJECT.md
       → gsd-docs/users/<handle>/projects/<ade_name>/.planning/PROJECT.md  (symlink)
         → gsd-docs/projects/<ade_name>/PROJECT.md                          (shared content)
 
-After that migration, the template is no longer the file's owner — gsd-docs
-is. Subsequent `copier recopy --overwrite` runs must not rewrite it:
+Once that symlink exists, any subsequent render must not touch the path:
 
 1. Writing `.planning/PROJECT.md` follows the outer `.planning/` dir-symlink
    into `$PERSONAL_DIR`, then hits the inner file-symlink. `--overwrite`
    unlinks the path before writing, converting the symlink into a regular
    file. That lands as a `typechange` in the gsd-docs repo every recopy —
    unstaged diff noise with no legitimate author intent behind it.
-2. Even if the symlink survived, the rendered template would clobber whatever
-   content the project has since evolved to in shared storage on every
-   template bump.
+2. Even if the symlink survived, the rendered template would clobber
+   whatever content the project has since evolved to in shared storage on
+   every template bump.
 
-**Implementation:** `_skip_if_exists` entries are Jinja-evaluated, so the
-entry reads:
+**Why conditional filename and not `_skip_if_exists`:** `_skip_if_exists`
+blocks the write but not the render+diff pass that precedes it. When the
+rendered template (ADE skeleton) differs from the destination content
+(project's evolved prose, via symlink), copier still prints `conflict
+.planning/PROJECT.md` followed by `skip .planning/PROJECT.md` on every
+recopy. Those lines are harmless but indistinguishable from real conflicts
+in output review. The conditional-filename pattern removes the path from
+the render entirely — no compare, no print, no skip.
 
-    _skip_if_exists:
-      - "{% if include_gsd_docs %}.planning/PROJECT.md{% endif %}"
+**Implementation:** The full file path on disk is literally
 
-With `include_gsd_docs=true` it resolves to `.planning/PROJECT.md`; Copier
-checks destination existence via `os.path.exists` (which follows symlinks)
-and skips the write when it resolves. With `include_gsd_docs=false` it
-resolves to the empty string, which matches no path, so D-022's "template
-wins" applies as for every other file.
+    template/.planning/{% if not include_gsd_docs %}PROJECT.md{% endif %}.jinja
+
+Per copier's [conditional files][copier-cond] rules the `.jinja` suffix
+must stay outside the conditional (otherwise copier treats the file as
+non-template and copies the raw path, brace-expression and all). Inside,
+`{% if not include_gsd_docs %}PROJECT.md{% endif %}` evaluates to the
+real filename or the empty string.
+
+`gsd-docs/bin/new-project.sh` accepts `--description <text>` and, if no
+shared `PROJECT.md` exists yet (fresh scaffold under gsd-docs mode), writes
+a starter body. `_task` 3 in `copier.yml` passes `--description
+"{{ description }}"` so the copier answer flows through.
 
 **Trade-off:** D-022 says every template-owned file is re-rendered on
-`copier recopy`. This decision creates a per-file exception. Accepted
-because ownership of this specific file genuinely transfers at scaffold
-time — the boundary is real, not a leak. Template edits to
-`template/.planning/PROJECT.md.jinja` stop propagating to ADEs that have
-already scaffolded, which is correct: at that point the author's project
-content, not the template's skeleton, is what belongs in PROJECT.md.
+`copier recopy`. This decision removes one file from the template's
+ownership surface entirely when `include_gsd_docs=true`. Accepted because
+the boundary is real: the moment gsd-docs is involved, PROJECT.md is
+someone else's problem. Changes to how a PROJECT.md *skeleton* looks for
+gsd-docs-enabled projects live in `gsd-docs/bin/new-project.sh`, not in
+`template/.planning/`.
 
-**Test coverage:** `test.sh` scenario 4 simulates the post-onboarding state
-(regular file → symlink into a shared dir), adds a marker to the shared
-target, runs `copier recopy --trust --skip-answered --overwrite`, and
-asserts the symlink is still a symlink with its original target, the marker
-survives, copier emits no `conflict`/`overwrite` line for the path, and no
-auto-commit fires.
+**Test coverage:** `test.sh` scenario 3 (no-op recopy with
+`include_gsd_docs=true`) asserts that copier's output contains no mention
+of `.planning/PROJECT.md` at all. Scenario 4 simulates the post-onboarding
+state and asserts the same, plus symlink preservation, shared-content
+integrity (marker), and no auto-commit. Scenario 6 (`include_gsd_docs=false`)
+asserts that `.planning/PROJECT.md` IS rendered as a regular file and that
+no stray `.jinja` leaks through the conditional.
