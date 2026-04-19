@@ -11,12 +11,13 @@
     {%- endif -%}
   {%- endif -%}
 {%- endfor -%}
+{%- set sorted_names = repo_names | sort(case_sensitive=false) -%}
 {
   "folders": [
-{%- for name in repo_names %}
-    {"name": {{ name | tojson }}, "path": {{ name | tojson }}},
+    {"name": {{ (ade_name ~ " (root)") | tojson }}, "path": "."}{% if sorted_names %},{% endif %}
+{%- for name in sorted_names %}
+    {"name": {{ name | tojson }}, "path": {{ name | tojson }}}{% if not loop.last %},{% endif %}
 {%- endfor %}
-    {"name": {{ (ade_name ~ " (root)") | tojson }}, "path": "."}
   ],
   "settings": {
     "git.autoRepositoryDetection": false,

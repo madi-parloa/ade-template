@@ -80,15 +80,24 @@ if settings.get("files.exclude", {}).get("**/.DS_Store") is not True:
 for i, f in enumerate(folders):
     if not isinstance(f, dict) or "name" not in f or "path" not in f:
         problems.append(f"malformed folder entry at index {i}: {f!r}")
-if folders and folders[-1].get("path") != ".":
+# Per D-016: ADE root is first, portfolio repos follow in case-insensitive alphabetical order.
+if folders and folders[0].get("path") != ".":
     problems.append(
-        f"last folder should be the ADE root at path '.', "
-        f"got {folders[-1] if folders else None!r}"
+        f"first folder should be the ADE root at path '.', "
+        f"got {folders[0] if folders else None!r}"
     )
-if folders and folders[-1].get("name") != "test-ade (root)":
+if folders and folders[0].get("name") != "test-ade (root)":
     problems.append(
-        f"last folder name should be 'test-ade (root)' "
-        f"(templated from ade_name), got {folders[-1].get('name')!r}"
+        f"first folder name should be 'test-ade (root)' "
+        f"(templated from ade_name), got {folders[0].get('name')!r}"
+    )
+portfolio_names = [f.get("name") for f in folders[1:]]
+expected_sorted = sorted(portfolio_names, key=lambda s: s.lower())
+if portfolio_names != expected_sorted:
+    problems.append(
+        "portfolio folders are not case-insensitive sorted:\n"
+        f"    got:      {portfolio_names}\n"
+        f"    expected: {expected_sorted}"
     )
 
 if problems:

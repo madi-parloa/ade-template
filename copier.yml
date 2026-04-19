@@ -2,13 +2,36 @@ _min_copier_version: "9.0.0"
 _subdirectory: template
 
 _tasks:
-  - >-
-    {% if portfolio_file %}cp "{{ portfolio_file }}" ade-repos.txt{% endif %}
+  # Task 1: override ade-repos.txt from a user-provided portfolio file, if any.
+  # Gated against copier temp renders (see D-015).
   - command:
       - bash
       - -c
       - |
         set -euo pipefail
+        # copier update re-renders the template in temp dirs (old_copy, new_copy)
+        # for its three-way merge. _tasks fire on those renders too. Skip work here;
+        # the same task will run in the real destination. See docs/DECISIONS.md D-015.
+        case "$PWD" in
+          */copier._main.*)
+            echo "==> [skip] copier temp render dir (task will run in destination): $PWD" >&2
+            exit 0
+            ;;
+        esac
+        {% if portfolio_file %}cp "{{ portfolio_file }}" ade-repos.txt{% endif %}
+  # Task 2: portfolio sync — clone any missing repos listed in ade-repos.txt.
+  # Existing repos are never touched (never pulled). Gated against copier temp renders.
+  - command:
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        case "$PWD" in
+          */copier._main.*)
+            echo "==> [skip] copier temp render dir (task will run in destination): $PWD" >&2
+            exit 0
+            ;;
+        esac
         [ -f ade-repos.txt ] || exit 0
         CLONE_FAILURES=0
         while read -r url; do
@@ -39,11 +62,18 @@ _tasks:
         if [ "$CLONE_FAILURES" -gt 0 ]; then
           echo "==> $CLONE_FAILURES repo(s) failed to clone — continuing"
         fi
+  # Task 3: GSD install — tracks @latest. Gated against copier temp renders.
   - command:
       - bash
       - -c
       - |
         set -euo pipefail
+        case "$PWD" in
+          */copier._main.*)
+            echo "==> [skip] copier temp render dir (task will run in destination): $PWD" >&2
+            exit 0
+            ;;
+        esac
         echo "==> Installing/refreshing GSD workspace-locally..."
         npx -y get-shit-done-cc@latest --local --cursor
   - command: "git init && git add -A && git commit -m 'ADE scaffold'"
