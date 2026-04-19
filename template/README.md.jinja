@@ -27,11 +27,16 @@ uvx copier update --trust --skip-answered
 
 Single entry point. Safe to run on a clean tree at any time — no prompts, no manual follow-up. Pulls template/docs changes (AGENTS.md guidance, `.planning/codebase/*` intel, refreshed workspace file) AND:
 
-- clones any repos newly added to `ade-repos.txt` (existing repos untouched — safe for WIP branches);
+- 3-way merges `ade-repos.txt` — any repos newly added to the template's default list land automatically, and your local edits are preserved;
+- clones any repos newly added to `ade-repos.txt` (from the merge above, or from your own edits); existing repos are untouched — safe for WIP branches;
 - refreshes GSD via `npx -y get-shit-done-cc@latest --local --cursor`;
 - auto-commits its own output as `chore: copier update to <new_commit>` so the working tree is clean when the command returns.
 
 That auto-commit means consecutive updates work with no manual `git commit` in between. If copier's 3-way merge leaves unresolved conflict markers in any file, auto-commit is skipped and the tree is left dirty for you to resolve manually.
+
+### `portfolio_file` is a scaffold-only input
+
+If this ADE was scaffolded with `--data portfolio_file=...`, that file was a one-time seed for `ade-repos.txt`. After scaffold, `ade-repos.txt` belongs to this repo — edit it directly. `copier update` does **not** re-read `portfolio_file`; re-passing it is a no-op. This keeps `copier update` resilient to the source file being moved or deleted, and lets the template add new default repos without clobbering your list.
 
 ## Pulling existing clones (optional, manual)
 
@@ -43,7 +48,7 @@ for d in */; do [ -d "$d/.git" ] && git -C "$d" pull --ff-only; done
 
 ## Producing a different ADE
 
-1. **Different repos** — re-run copier with `--data portfolio_file=/path/to/my-repos.txt`, or edit `ade-repos.txt` and run `uvx copier update --trust --skip-answered` to clone any newly listed entries.
+1. **Different repos** — edit `ade-repos.txt` directly and run `uvx copier update --trust --skip-answered` to clone any newly listed entries. To seed a fresh ADE from your own list, scaffold a *new* ADE with `--data portfolio_file=/path/to/my-repos.txt` (the input is scaffold-only; see "Updating" above).
 2. **Fork the template** — `gh repo fork madi-parloa/ade-template --remote` and scaffold from your fork.
 
 ## Files

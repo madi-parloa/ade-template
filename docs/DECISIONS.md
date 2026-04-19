@@ -316,3 +316,92 @@ Copier does not expose "the set of files copier just wrote" in a way `_tasks` ca
 - After `copier copy`: exactly one commit (`ADE scaffold`), clean tree.
 - After `copier update v0.0.0 → v0.0.1` on a content-changing bump: exactly two commits (`ADE scaffold`, then `chore: copier update to v0.0.1`), clean tree.
 - After a second `copier update` at v0.0.1 (no-op): still two commits, clean tree, auto-commit correctly emits `nothing to commit`.
+
+> **Superseded by D-020 (v0.8.5):** the mechanism described above (final `_task` with `when: update` + pwd gate) was found to commit pre-merge state. See D-020 for the fix — the auto-commit is now an `_migrations` entry with `when: "{{ _stage == 'after' }}"`. The external contract (auto-commit fires at end of every successful update; same conflict-marker abort behavior; same commit-message format) is unchanged.
+
+## D-019: `portfolio_file` is a scaffold-time seed, not an update-time sync source
+
+**Decision:** The `_task` that seeds `ade-repos.txt` from `portfolio_file` is gated with `when: "{{ _copier_operation == 'copy' }}"`. It runs exactly once, during `copier copy`. On `copier update` the task is a no-op; `ade-repos.txt` is treated as user-owned and merged by copier's built-in 3-way merge (with template additions landing automatically where the user hasn't diverged).
+
+**Context — what v0.8.4 got wrong:** Up through v0.8.4 the seed task was `when`-unrestricted and pwd-gated, so it ran on every `copier update` in the destination. The rendered command was literally `cp "{{ portfolio_file }}" ade-repos.txt`. Three concrete failure modes flowed from that:
+
+1. **Update breaks when `portfolio_file` is no longer on disk.** User scaffolds with `--data portfolio_file=/tmp/my-list.txt`, deletes `/tmp/my-list.txt` later (it was a scratch file), then runs `uvx copier update`. The task fails under `set -euo pipefail` (`cp: /tmp/my-list.txt: No such file or directory`) → update aborts mid-flight → dirty tree → user cannot update and isn't told how to recover.
+2. **Template additions get clobbered.** Copier's merge lands new default repos into `ade-repos.txt` during the render phase. Our seed `_task` then runs `cp "$portfolio_file" ade-repos.txt`, overwriting the merged result. Custom-portfolio users never see template additions.
+3. **Local edits to `ade-repos.txt` get reverted.** Scaffolded with a `portfolio_file`, then added a personal repo by editing `ade-repos.txt` directly → next update reverts to whatever `portfolio_file` currently contains.
+
+All three follow from treating `portfolio_file` as a live source-of-truth on update. It isn't, and the docs never framed it that way — it's a convenience for the first scaffold.
+
+**Why copy-only is the right semantics:**
+
+- **Scaffold:** user picks a portfolio at copy time (either via the default `template/ade-repos.txt` or by passing `--data portfolio_file=<abs-path>`). The seed task copies it in. From this point `ade-repos.txt` is the project's portfolio state, owned by the project's git repo.
+- **Update:** `ade-repos.txt` is a regular template-tracked file. Copier's update applies `diff(old_template, new_template)` to the destination. New default repos in the template propagate through the merge; user's local edits are preserved by the same merge. No separate codepath needed.
+- **Changing portfolios later:** edit `ade-repos.txt` directly, run `uvx copier update`, and the portfolio-sync `_task` clones anything newly listed. This was already the documented path for portfolio edits; v0.8.5 makes it the only path.
+
+**Why not "copy on update only if the file still exists":**
+
+We considered making the task best-effort on update (skip if source missing, copy otherwise). Rejected because failure mode #2 (clobbering template additions) persists even if source exists. Copy-only is the only option that gets all three failure modes right, and it matches how every other copier answer behaves (stored at scaffold, referenced for re-prompt suppression, not re-executed on update).
+
+**Trade-offs:**
+
+- **Custom-portfolio users who expected `portfolio_file` to be a live pointer lose that behavior.** Not a real regression: nobody was known to be using it that way, the behavior was never documented, and the failure mode it exhibited (silent clobber of template additions) was worse than the current "scaffold-time only" semantics. The `portfolio_file` answer remains in `.copier-answers.yml` as a historical record; it just no longer triggers a `cp`.
+- **Answers file still contains a potentially stale path.** Fine. Copier treats the answer as data. It's only consulted when the scaffold task is re-evaluated, which no longer happens post-scaffold. Users who care can edit `.copier-answers.yml` to clear `portfolio_file: ""`, but there's no functional need to.
+
+**Commit tasks around this decision:**
+
+- `_tasks[0]` gains `when: "{{ _copier_operation == 'copy' }}"` and loses its pwd gate (copy has no temp renders; the gate was only needed because the task previously ran on update too).
+- Fallback rendering: when `portfolio_file` is empty the command renders to `true`, keeping the task valid under all inputs.
+
+**Validation:** `test.sh` now includes a scenario specifically for failure mode #1 — scaffold with `portfolio_file=<tmpfile>`, delete the tmpfile, bump the template to v0.0.2, run `copier update`. Must exit 0, `ade-repos.txt` unchanged (still custom), auto-commit fires, tree clean.
+
+**Related decisions:**
+
+- D-005 introduced `portfolio_file` as a scaffold input. This decision narrows its scope to match original intent.
+- D-015 introduced the pwd gate for tasks 2 and 3 (portfolio sync, GSD install). Task 1 no longer needs the gate because `when: copy` eliminates the temp-render run entirely.
+- D-018 / D-020: the auto-commit at end of update ensures template-merge changes to `ade-repos.txt` don't leave the tree dirty.
+
+## D-020: Auto-commit uses `_migrations` (not `_tasks`) to run AFTER copier's diff is applied
+
+**Decision:** The auto-commit introduced in D-018 is implemented as an `_migrations` entry with `when: "{{ _stage == 'after' }}"`, not as a final `_tasks` entry with `when: "{{ _copier_operation == 'update' }}"`. The external contract described in D-018 is unchanged (auto-commit fires after every successful update, aborts loudly on conflict markers, emits `nothing to commit` for no-op updates, commit message format is `chore: copier update to <new_commit_tag>`). Only the implementation hook changes.
+
+**Context — the bug we hit in v0.8.5 testing:** While adding the D-019 fix (portfolio_file copy-only), the test script's existing "`copier update v0.0.0 → v0.0.1` leaves a clean tree" assertion started failing. The auto-commit ran and produced a commit with `3 files changed`, but immediately after the commit `git status` reported `M ade-repos.txt`. The `ade-repos.txt` content in the commit was 15 repos (the template default); the working-tree content after copier finished was empty (the scaffold seed). Something was reverting the file after the `_task` ran.
+
+Reading `copier/_main.py:_apply_update()` revealed the actual update flow:
+
+1. Render old template (v_from) into a temp directory `old_copy`.
+2. Snapshot the current destination index as a git tree (`subproject_head`) — this is the user's *current, pre-update* state.
+3. Run `current_worker.run_copy()` on the destination. **This is the inner copy pass**: it overwrites destination files with the new template's rendered output, and it runs all `_tasks`. Our `_tasks`-based auto-commit fires here, capturing the new-template state written to destination.
+4. Render new template (v_to) into another temp directory `new_copy`.
+5. Compute `diff(old_copy → subproject_head)` — this is exactly "what the user had diverged from the old template." Apply this diff to the destination via `git apply --reject`.
+6. Run `migration_tasks("after", ...)` — these run post-diff-apply.
+
+Step 5 restores the user's pre-update divergence on top of the new template. That's the 3-way-merge-semantic: template additions land where user didn't touch, user customizations survive where template didn't touch. But it runs *after* our `_tasks`-based auto-commit. In the test scenario, the user's "divergence" was `ade-repos.txt = empty` (seeded from `/dev/null`), so step 5 reverted `ade-repos.txt` back to empty after the commit captured it as the 15-repos template default. Committed state and working-tree state ended up out of sync → dirty tree with the impossibility of resolving it without rewriting the commit.
+
+This bug was present in v0.8.4 too but *masked by v0.8.4's task 1*. In v0.8.4 task 1 (`cp /dev/null ade-repos.txt`) ran on every update, pre-reverting `ade-repos.txt` to empty *before* the auto-commit saw it — which matched the post-diff-apply state, so the commit was accidentally correct. Removing that masking (D-019) exposed the underlying bug.
+
+**Why `_migrations` is the right hook:**
+
+`_migrations` tasks with `_stage == "after"` run at step 6 in the flow above — after the diff from step 5 has been applied. By the time our command runs, the working tree reflects the final post-merge state that `copier update` will leave behind. Committing that state is correct: it matches what the user would see on exit.
+
+Confirmed behavior in `copier/_main.py` and `copier/_template.py`:
+- `_apply_update()` calls `migration_tasks("after", ...)` at the very end, after `apply_cmd << diff` and after `_remove_old_files`. No further mutation of the destination happens after this point.
+- `_execute_tasks()` (line 353) exposes migration extra-vars to Jinja prefixed with `_`: `stage` → `_stage`, `version_from` → `_version_from`, `version_to` → `_version_to`, plus `_copier_operation`. So `{{ _version_to }}` expands to the new template ref (e.g. `v0.8.5`) — same value that would have been parsed from `.copier-answers.yml`, but available directly in the render context.
+- A migration with no `version:` key fires on every update (including no-op updates where `version_from == version_to`), which matches our "commit whatever copier left dirty, or silently no-op" semantics. The no-op case is handled by the `git diff --quiet` check inside the command.
+
+**Why the `_tasks`-based implementation was never going to be right:**
+
+The copier documentation describes `_tasks` as running "after generation" but doesn't specify that during update, "after generation" means "after the inner copy pass, still before the final diff-apply." The distinction only matters when a task tries to commit or otherwise observe the final state. For our auto-commit, the distinction is fatal. No amount of pwd-gating or `when:` tweaking on a `_task` can move its execution point past step 5.
+
+**Trade-offs:**
+
+1. **`_migrations` only fires on update (not on copy).** That's the behavior we want anyway — on `copy`, the dedicated `git init && git add -A && git commit -m 'ADE scaffold'` task (D-004) handles the initial commit. No redundancy.
+2. **`_migrations` doesn't participate in copier's "number of tasks" reporting alongside `_tasks`.** Cosmetic. The migration prints its own `==> [auto-commit] copier update to <ref>` banner, which is clearer than "Running task N of M" anyway.
+3. **`_migrations` without a `version:` key is technically intended for per-version one-shot migrations in the copier docs, but it works on every update when the key is omitted.** We verified this behavior in `_template.py:migration_tasks()`; without a version key the `if "version" in migration` range check is skipped and the task is unconditionally appended to the result. This is stable API in copier 9.x.
+4. **Commit message source changed from awk-parsing `.copier-answers.yml` to `{{ _version_to }}`.** Strictly better: avoids reading a file that copier just re-rendered, and `_version_to` is the canonical value copier itself uses.
+
+**What this replaces / relates to:**
+
+- D-018 described the auto-commit feature and its safety analysis. Everything in D-018 about *why* we auto-commit, *why* it's safe, and *what to do about conflict markers* still applies. Only the "final `_task` with `when: update` + pwd gate" mechanism is replaced; the pwd gate is no longer needed because `_migrations` inherently run in the destination, never in temp render dirs.
+- D-015 explains copier's inner-copy pass running tasks in temp dirs. The same flow is what mis-timed the auto-commit in v0.8.4 — the pwd gate fixed the "runs 3×" symptom but not the "runs at wrong lifecycle point" root cause. `_migrations` addresses the root cause.
+- D-019's "copy-only portfolio_file seed" is what surfaced this bug. Without the masking effect of that task, any `copier update` that left `ade-repos.txt` divergent from template would have shown the same tree-dirty-after-commit result.
+
+**Validation:** `test.sh` continues to assert the full commit-count + commit-message + clean-tree lifecycle (scaffold produces 1 commit, content-changing update adds exactly 1 auto-commit with message `chore: copier update to v0.0.1`, no-op update adds 0 commits, tree clean throughout). The new D-019 scenario (scaffold with `portfolio_file`, delete source, update to v0.0.2) additionally verifies that the auto-commit message reads `chore: copier update to v0.0.2` and the tree is clean — end-to-end proof that `_version_to` resolves correctly and the post-diff state is what gets committed.

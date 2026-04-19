@@ -52,40 +52,45 @@ The repo root holds `copier.yml` and `README.md` (copier config + landing page).
 
 `copier update` requires the destination to be a git repo (hard requirement — the source code raises `UserMessageError("Updating is only supported in git-tracked subprojects.")`). This is a local `.git/` only — no remote, no push.
 
-Guard rule for `_tasks`: three orthogonal gating mechanisms, combined per task.
+Guard rule for `_tasks`: two orthogonal gating mechanisms, combined per task.
 
-1. **`when: "{{ _copier_operation == 'copy' }}"`** — restricts a task to first-scaffold only. Used for tasks that would fail or be user-hostile on `copier update` (`git init` would find no `.git/`; Cursor launch would re-launch on every template bump).
-2. **`when: "{{ _copier_operation == 'update' }}"`** — restricts a task to update only. Used for the auto-commit task (D-018), which would fire redundantly on copy where a dedicated `ADE scaffold` commit already runs.
-3. **`case "$PWD" in */copier._main.*) exit 0 ;; esac`** at the top of the task body — skips copier's internal temp render dirs (the `old_copy` and `new_copy` passes of its three-way merge), leaving only the destination pass. Used for tasks that must run on `copier update` but should run **exactly once per update**, not three times. See D-015.
+1. **`when: "{{ _copier_operation == 'copy' }}"`** — restricts a task to first-scaffold only. Used for tasks that would fail or be user-hostile on `copier update` (`git init` would find no `.git/`; Cursor launch would re-launch on every template bump; the `portfolio_file` seed would clobber template additions and break if the source file is gone — see D-019).
+2. **`case "$PWD" in */copier._main.*) exit 0 ;; esac`** at the top of the task body — skips copier's internal temp render dirs (the `old_copy` and `new_copy` passes of its three-way merge), leaving only the destination pass. Used for tasks that must run on `copier update` but should run **exactly once per update**, not three times. See D-015.
+
+Auto-commit uses a third mechanism — `_migrations` with `when: "{{ _stage == 'after' }}"` — because `_tasks` run *before* copier applies its final diff to the destination (see `copier/_main.py:_apply_update` and D-020). `_migrations` "after" fires post-diff, which is the only correct timing for committing the final state.
 
 Current policy per task (order matches `copier.yml`):
 
 | Task | `when` | pwd gate? | Runs on copy | Runs on update |
 |---|---|---|---|---|
-| Copy `portfolio_file` → `ade-repos.txt` (if provided) | none | yes | yes | yes — once in destination |
+| Seed `ade-repos.txt` from `portfolio_file` (if provided) | `copy` | n/a | yes | **no** (D-019) |
 | Portfolio sync — **clone-if-missing** loop | none | yes | yes | yes — once in destination (new repos cloned; existing repos untouched) |
 | GSD install — `npx -y get-shit-done-cc@latest --local --cursor` | none | yes | yes | yes — once in destination (tracks `@latest`) |
 | `git init && git add -A && git commit -m 'ADE scaffold'` | `copy` | n/a | yes | no |
 | Cursor launch (`cursor --new-window`) | `copy` | n/a | yes | no |
-| Auto-commit `chore: copier update to <new_commit>` | `update` | yes | no | yes — once in destination (D-018) |
+| `_migrations` auto-commit `chore: copier update to <_version_to>` | `_stage == 'after'` | n/a (migrations only fire in destination) | no | yes — once, after diff-apply (D-018 / D-020) |
 
 The sync loop never `git pull`s existing repos. `copier update` bringing in a new `ade-repos.txt` entry results in one `git clone`; already-cloned repos are left alone so that user WIP branches are never stomped. Users who want to pull everything run the one-liner documented in the scaffolded `README.md`.
 
 Kitchen installers (`claudes-kitchen`, `open-kitchen`) are deliberately skipped; see D-013.
 
-**One-command-forever update contract (v0.8.4+):** `uvx copier update --trust --skip-answered` is designed to be a true single entry point — no pre-commit of previous updates, no prompts, no post-commit. The auto-commit task at the end of the update chain ensures the working tree is clean after every successful update, so the next update has no dirty-tree blocker. If copier's 3-way merge produces unresolved conflict markers, the auto-commit aborts loudly and the tree is left dirty for manual resolution — same failure mode as pre-v0.8.4. See D-018 for the full safety analysis.
+**`ade-repos.txt` ownership model (v0.8.5+, D-019):** the `portfolio_file` input is a scaffold-time seed only. After first scaffold, `ade-repos.txt` is project-owned and lives in the ADE's git history. On `copier update` it's merged by copier's built-in 3-way diff just like every other template file — so new default repos added upstream land automatically where the user hasn't diverged, and user-local edits are preserved where they have diverged. Users who want to change portfolio post-scaffold edit `ade-repos.txt` directly; the clone-if-missing sync task then picks up any newly listed entries on the next update.
 
-The evolution of this policy — v0.7.0 unguarded-with-pull, v0.7.1 guarded-to-copy-only, v0.7.2 unguarded-clone-if-missing under accepted 3× execution, v0.8.3 pwd-gated for 1× execution, v0.8.4 add auto-commit-on-update — is documented in D-007, D-009, D-015, and D-018. The copier double-render behavior that makes the pwd gate necessary is explained in D-009 and D-015.
+**One-command-forever update contract (v0.8.4+, refined in v0.8.5):** `uvx copier update --trust --skip-answered` is designed to be a true single entry point — no pre-commit of previous updates, no prompts, no post-commit. The `_migrations` auto-commit at the end of the update chain ensures the working tree is clean after every successful update, so the next update has no dirty-tree blocker. If copier's 3-way merge produces unresolved conflict markers, the auto-commit aborts loudly and the tree is left dirty for manual resolution — same failure mode as pre-v0.8.4. See D-018 for the safety analysis and D-020 for why the `_tasks`-based implementation in v0.8.4 had to be moved to `_migrations`.
 
-### 5. Portfolio as a copier input with file override
+The evolution of this policy — v0.7.0 unguarded-with-pull, v0.7.1 guarded-to-copy-only, v0.7.2 unguarded-clone-if-missing under accepted 3× execution, v0.8.3 pwd-gated for 1× execution, v0.8.4 add auto-commit-on-update, v0.8.5 portfolio_file copy-only + auto-commit moved to `_migrations` — is documented in D-007, D-009, D-015, D-018, D-019, and D-020. The copier double-render behavior that makes the pwd gate necessary is explained in D-009 and D-015. The inner-copy-pass vs. diff-apply lifecycle distinction that forces auto-commit into `_migrations` is explained in D-020.
 
-The default repo list lives in `template/ade-repos.txt`. Users can override it via:
+### 5. Portfolio as a copier input with scaffold-time file override
+
+The default repo list lives in `template/ade-repos.txt`. Users can override the initial list at scaffold time via:
 
 ```bash
 uvx copier copy --trust --data portfolio_file=/path/to/my-repos.txt ...
 ```
 
-The `_tasks` copies the user's file over `ade-repos.txt` before running install. Absolute paths are required (tasks run in the output directory, not the user's CWD).
+A `_task` copies the user's file over the rendered `ade-repos.txt` during `copier copy` — gated with `when: "{{ _copier_operation == 'copy' }}"`. Absolute paths are required (tasks run in the output directory, not the user's CWD).
+
+After the initial scaffold, `ade-repos.txt` is owned by the ADE's git repo. Portfolio changes are made by editing `ade-repos.txt` directly and running `uvx copier update --trust --skip-answered` (which runs the clone-if-missing sync on any newly listed entries). The `portfolio_file` input is **not** re-applied on update — doing so broke multiple things in v0.8.4 (failed updates when the source file had moved, silently clobbered template additions, reverted user-local edits). See D-019 for the full reasoning.
 
 ### 6. Pre-seeded .planning/codebase/ intel
 
@@ -136,17 +141,13 @@ _min_copier_version: "9.0.0"
 _subdirectory: template           # template content lives under template/
 
 _tasks:
-  # 1. Override ade-repos.txt if user provided a custom file (no-op when unset).
-  #    pwd-gated against copier temp renders (see D-015).
-  - command:
-      - bash
-      - -c
-      - |
-        set -euo pipefail
-        case "$PWD" in
-          */copier._main.*) echo "==> [skip] copier temp render dir" >&2; exit 0 ;;
-        esac
-        {% if portfolio_file %}cp "{{ portfolio_file }}" ade-repos.txt{% endif %}
+  # 1. Seed ade-repos.txt from a user-provided portfolio file (scaffold only).
+  #    `when: copy` scopes to the initial scaffold; on update, ade-repos.txt is
+  #    merged by copier's built-in 3-way diff like any other template file.
+  #    See D-019.
+  - command: >-
+      {% if portfolio_file %}cp "{{ portfolio_file }}" ade-repos.txt{% else %}true{% endif %}
+    when: "{{ _copier_operation == 'copy' }}"
   # 2. Portfolio sync: clone missing repos; existing repos are never touched.
   #    Propagates new ade-repos.txt entries on copier update.
   #    Kitchen installers are deliberately skipped; see D-013.
@@ -175,9 +176,23 @@ _tasks:
   # 5. Open Cursor (first scaffold only; otherwise Cursor relaunches on every update)
   - command: "cursor --new-window '{{ ade_name }}.code-workspace'"
     when: "{{ _copier_operation == 'copy' }}"
+
+# Runs after copier applies its post-task diff to the destination (see D-020).
+# This is where the working tree settles into its final post-update state, so
+# it's the correct hook for committing copier-managed changes. _tasks run too
+# early — during the inner copy pass, before copier's diff restores user
+# divergence from the old template.
+_migrations:
+  - when: "{{ _stage == 'after' }}"
+    command:
+      - bash
+      - -c
+      - |
+        # ... no-op-if-clean + conflict-marker detection + git add -A + commit ...
+        git commit -m "chore: copier update to {{ _version_to }}"
 ```
 
-Copier's update algorithm re-executes `_tasks` three times per update (old-baseline temp render, new-target temp render, and real project — the double-render path; see D-009). Without the pwd gate, tasks 1–3 would run 3× on every update — wasteful enough to matter for GSD install (which refetches the npm manifest and rewrites `.cursor/` each time) and noisy in the log even when the sync loop is idempotent. The pwd gate (D-015) inspects `$PWD` at the top of each task body and bails out with `exit 0` when the working directory matches copier's temp-dir naming convention (`copier._main.old_copy.*` and `copier._main.new_copy.*`). Result: tasks 1–3 run **exactly once per `copier update`**, in the real destination. Tasks 4 and 5 stay guarded to `copy` only for the independent reasons in the table above (no `.git/` in temp dirs; no point in re-launching Cursor on every template bump).
+Copier's update algorithm re-executes `_tasks` three times per update (old-baseline temp render, new-target temp render, and real project — the double-render path; see D-009). Without the pwd gate, tasks 2 and 3 would run 3× on every update — wasteful enough to matter for GSD install (which refetches the npm manifest and rewrites `.cursor/` each time) and noisy in the log even when the sync loop is idempotent. The pwd gate (D-015) inspects `$PWD` at the top of each task body and bails out with `exit 0` when the working directory matches copier's temp-dir naming convention (`copier._main.old_copy.*` and `copier._main.new_copy.*`). Result: tasks 2 and 3 run **exactly once per `copier update`**, in the real destination. Tasks 1, 4, and 5 stay guarded to `copy` only for the independent reasons in the table above (portfolio_file seed is scaffold-only per D-019; no `.git/` in temp dirs for task 4; no point in re-launching Cursor on every template bump for task 5). The auto-commit is not a `_task` at all — it's an `_migrations` entry, because `_tasks` run *before* copier's `git apply --reject` step re-applies user divergence to the destination; by the time `_migrations` "after" fires, the destination is in its final post-update state (D-020).
 
 ## Known limitations (v1)
 

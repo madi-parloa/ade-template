@@ -2,23 +2,17 @@ _min_copier_version: "9.0.0"
 _subdirectory: template
 
 _tasks:
-  # Task 1: override ade-repos.txt from a user-provided portfolio file, if any.
-  # Gated against copier temp renders (see D-015).
-  - command:
-      - bash
-      - -c
-      - |
-        set -euo pipefail
-        # copier update re-renders the template in temp dirs (old_copy, new_copy)
-        # for its three-way merge. _tasks fire on those renders too. Skip work here;
-        # the same task will run in the real destination. See docs/DECISIONS.md D-015.
-        case "$PWD" in
-          */copier._main.*)
-            echo "==> [skip] copier temp render dir (task will run in destination): $PWD" >&2
-            exit 0
-            ;;
-        esac
-        {% if portfolio_file %}cp "{{ portfolio_file }}" ade-repos.txt{% endif %}
+  # Task 1: seed ade-repos.txt from a user-provided portfolio file, if any.
+  # Runs ONLY on initial scaffold (copier copy). See D-019:
+  #   - portfolio_file is a scaffold-time seed; after first scaffold, ade-repos.txt
+  #     is the source of truth, owned by the user (and merged by copier's 3-way
+  #     merge on subsequent `copier update`s).
+  #   - Running this on update would (a) fail if portfolio_file no longer exists
+  #     on disk and (b) clobber template additions landed by the 3-way merge.
+  # No pwd gate needed: copier copy has no temp renders (only update does).
+  - command: >-
+      {% if portfolio_file %}cp "{{ portfolio_file }}" ade-repos.txt{% else %}true{% endif %}
+    when: "{{ _copier_operation == 'copy' }}"
   # Task 2: portfolio sync — clone any missing repos listed in ade-repos.txt.
   # Existing repos are never touched (never pulled). Gated against copier temp renders.
   - command:
@@ -97,39 +91,28 @@ _tasks:
           open -a Cursor "$ws"
         fi
     when: "{{ _copier_operation == 'copy' }}"
-  # Final task (update only): auto-commit copier-managed changes so the working
-  # tree is clean after every successful update. This makes `uvx copier update`
-  # a one-command-forever operation — the next update won't be blocked by a
-  # dirty tree left over from this one. See docs/DECISIONS.md D-018.
-  #
-  # Safety: copier refuses updates on a dirty tree, so by the time this task
-  # runs, every dirty path in the destination is copier-managed by definition.
-  # `git add -A` is therefore safe.
-  #
-  # If copier's 3-way merge left conflict markers, we abort auto-commit with a
-  # loud message so the user resolves them manually — committing unresolved
-  # conflicts would be worse than leaving the tree dirty.
-  - command:
+
+# _migrations run at a different lifecycle point than _tasks:
+# _tasks run inside copier's INNER copy pass (before the diff from
+# old_copy is applied back over the destination — see copier/_main.py
+# `_apply_update`). _migrations "after" stage runs AFTER that diff has
+# been applied, so the working tree it sees is the final post-merge
+# state. That's where auto-commit belongs. See docs/DECISIONS.md D-019.
+_migrations:
+  - when: "{{ _stage == 'after' }}"
+    command:
       - bash
       - -c
       - |
         set -euo pipefail
-        case "$PWD" in
-          */copier._main.*)
-            echo "==> [skip] copier temp render dir (auto-commit runs in destination): $PWD" >&2
-            exit 0
-            ;;
-        esac
         if ! git rev-parse --git-dir >/dev/null 2>&1; then
           echo "==> [auto-commit] not a git repo — skipping" >&2
           exit 0
         fi
-        # Nothing changed? Update was a no-op. Exit clean.
         if git diff --quiet && git diff --cached --quiet; then
           echo "==> [auto-commit] nothing to commit"
           exit 0
         fi
-        # Detect unresolved 3-way merge conflict markers in any modified file.
         conflicted=""
         while IFS= read -r f; do
           [ -f "$f" ] || continue
@@ -143,11 +126,9 @@ _tasks:
           echo "    Resolve conflicts manually, then: git add -A && git commit" >&2
           exit 0
         fi
-        new_commit="$(awk '/^_commit:/ {print $2; exit}' .copier-answers.yml 2>/dev/null || echo unknown)"
-        echo "==> [auto-commit] copier update to ${new_commit}"
+        echo "==> [auto-commit] copier update to {{ _version_to }}"
         git add -A
-        git commit -m "chore: copier update to ${new_commit}"
-    when: "{{ _copier_operation == 'update' }}"
+        git commit -m "chore: copier update to {{ _version_to }}"
 
 ade_name:
   type: str
